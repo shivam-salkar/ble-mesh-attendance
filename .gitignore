@@ -1,0 +1,144 @@
+# ==============================================================================
+# Git Ignore - BLE Mesh Attendance
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Secrets & Environment Files
+# ------------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+*.jks
+*.p12
+*.p8
+*.mobileprovision
+*.cer
+*.crt
+secring.*
+
+# ------------------------------------------------------------------------------
+# Operating System Files
+# ------------------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# ------------------------------------------------------------------------------
+# IDEs and Editors
+# ------------------------------------------------------------------------------
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# JetBrains / Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Other editors
+*.swp
+*.swo
+*~
+*.bak
+
+# ------------------------------------------------------------------------------
+# Flutter & Dart
+# ------------------------------------------------------------------------------
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+apps/mobile/build/
+apps/mobile/.dart_tool/
+apps/mobile/.flutter-plugins
+apps/mobile/.flutter-plugins-dependencies
+
+# Symbol & debug artifacts
+*.symbols
+*.map
+*.js.map
+
+# Flutter Android specific
+apps/mobile/android/.gradle/
+apps/mobile/android/local.properties
+apps/mobile/android/captures/
+apps/mobile/android/gradlew
+apps/mobile/android/gradlew.bat
+apps/mobile/android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java
+
+# Flutter iOS specific
+apps/mobile/ios/Flutter/Generated.xcconfig
+apps/mobile/ios/Flutter/flutter_export_environment.sh
+apps/mobile/ios/Flutter/Flutter.podspec
+apps/mobile/ios/Flutter/App.framework
+apps/mobile/ios/Flutter/Flutter.framework
+apps/mobile/ios/.symlinks/
+apps/mobile/ios/Pods/
+apps/mobile/ios/Podfile.lock
+apps/mobile/ios/DerivedData/
+
+# ------------------------------------------------------------------------------
+# ESP-IDF / C / C++
+# ------------------------------------------------------------------------------
+# Firmware build output
+firmware/esp32-gateway/build/
+**/build/
+
+# ESP-IDF generated files (sdkconfig.defaults is tracked)
+sdkconfig
+sdkconfig.old
+firmware/esp32-gateway/sdkconfig
+firmware/esp32-gateway/sdkconfig.old
+
+# C/C++ object files and binaries
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.exe
+*.bin
+*.elf
+*.a
+*.lib
+
+# CMake artifacts when generated outside build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# ------------------------------------------------------------------------------
+# Supabase & Backend
+# ------------------------------------------------------------------------------
+.supabase/
+supabase/.temp/
+backend/.temp/
+backend/.branches/
+backend/.env
