@@ -1,6 +1,8 @@
 name: Protect Protected Files
 
 on:
+  push:
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -16,7 +18,11 @@ jobs:
 
       - name: Check if LICENSE was modified
         run: |
-          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          else
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD || true)
+          fi
           echo "Changed files:"
           echo "$CHANGED_FILES"
 
