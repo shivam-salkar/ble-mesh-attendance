@@ -1,0 +1,26 @@
+name: Protect Protected Files
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check-protected-files:
+    name: Verify LICENSE is untouched
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if LICENSE was modified
+        run: |
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          if echo "$CHANGED_FILES" | grep -qx "LICENSE"; then
+            echo "::error::Modification of LICENSE is strictly prohibited."
+            exit 1
+          fi
