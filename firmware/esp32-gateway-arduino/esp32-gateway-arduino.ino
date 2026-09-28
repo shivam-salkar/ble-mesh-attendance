@@ -131,6 +131,9 @@ uint32_t validPacketsReceived   = 0;
 uint32_t duplicatePacketsCount  = 0;
 uint32_t invalidPacketsCount    = 0;
 
+// Display settings
+bool showUnnamedDevices         = true;  // Toggle with 'u' in serial monitor
+
 // ─── Forward Declarations ────────────────────────────────────────
 
 bool isPacketDuplicate(uint32_t packetId);
@@ -418,7 +421,36 @@ void printDiagnostics() {
 // ─── Scan Complete Callback ──────────────────────────────────────
 
 void scanCompleteCB(BLEScanResults results) {
-    Serial.printf("[SCAN] Cycle complete — %d devices seen\n", results.getCount());
+    int count = results.getCount();
+    int namedCount = 0;
+
+    Serial.println();
+    Serial.printf("[SCAN] Cycle complete — %d devices detected:\n", count);
+    Serial.println("  +----+--------------------------+-------------------+----------+");
+    Serial.println("  | #  | Device Name              | MAC Address       | Signal   |");
+    Serial.println("  +----+--------------------------+-------------------+----------+");
+
+    for (int i = 0; i < count; i++) {
+        BLEAdvertisedDevice dev = results.getDevice(i);
+        String name = dev.haveName() ? dev.getName() : "";
+        bool hasName = (name.length() > 0);
+
+        if (hasName) {
+            namedCount++;
+        }
+
+        if (hasName || showUnnamedDevices) {
+            const char* displayName = hasName ? name.c_str() : "(unnamed)";
+            Serial.printf("  | %02d | %-24.24s | %s | %4d dBm |\n",
+                          i + 1, displayName, dev.getAddress().toString().c_str(), dev.getRSSI());
+        }
+    }
+    Serial.println("  +----+--------------------------+-------------------+----------+");
+    Serial.printf("  Summary: %d named, %d unnamed (Total: %d)\n", namedCount, count - namedCount, count);
+    if (!showUnnamedDevices && (count - namedCount > 0)) {
+        Serial.printf("  [Tip] %d unnamed devices hidden. Type 'u' + Enter to show all.\n", count - namedCount);
+    }
+    Serial.println();
 }
 
 // ─── Setup ───────────────────────────────────────────────────────
@@ -571,12 +603,19 @@ void loop() {
                 pBLEScan->clearResults();
                 pBLEScan->start(SCAN_DURATION_SECS, scanCompleteCB, false);
                 break;
+            case 'u':
+            case 'U':
+                showUnnamedDevices = !showUnnamedDevices;
+                Serial.printf("[CMD] Show unnamed devices: %s\n",
+                              showUnnamedDevices ? "ENABLED (showing all)" : "DISABLED (showing named only)");
+                break;
             case 'h':
             case 'H':
             case '?':
                 Serial.println();
                 Serial.println("--- Gateway Commands ---");
                 Serial.println("  d — Print diagnostics");
+                Serial.println("  u — Toggle unnamed devices in scan output");
                 Serial.println("  r — Reset counters");
                 Serial.println("  s — Restart BLE scan");
                 Serial.println("  h — Show this help");
