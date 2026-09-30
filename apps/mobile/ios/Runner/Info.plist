@@ -66,5 +66,16 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- BLE permissions for Phase 4 cross-platform relay testing -->
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>BLE Mesh Attendance needs Bluetooth to communicate with the classroom gateway and relay attendance packets.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>BLE Mesh Attendance needs Bluetooth peripheral access to relay attendance packets to other devices.</string>
+	<!-- Background BLE modes (foreground-primary, but declared for stability) -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+		<string>bluetooth-peripheral</string>
+	</array>
 </dict>
 </plist>

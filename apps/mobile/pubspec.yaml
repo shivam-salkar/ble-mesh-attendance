@@ -35,6 +35,21 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # BLE Central role — scan, connect, read/write characteristics
+  flutter_blue_plus: ^1.35.0
+
+  # BLE Peripheral role — advertise, host GATT server for relay
+  flutter_ble_peripheral: ^2.1.0
+
+  # Persistent device ID storage
+  shared_preferences: ^2.3.0
+
+  # Unique packet ID generation
+  uuid: ^4.5.0
+
+  # Platform detection
+  device_info_plus: ^11.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
