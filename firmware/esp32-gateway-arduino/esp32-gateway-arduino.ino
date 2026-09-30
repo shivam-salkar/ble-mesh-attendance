@@ -1,7 +1,7 @@
 /**
  * ═══════════════════════════════════════════════════════════════════
  *  BLE Mesh Attendance — ESP32-S3 Classroom Gateway (Arduino)
- *  Phase 1: BLE Advertisement + Scan
+ *  Phase 1 + Phase 4: BLE Advertisement + Scan + Relay + TFT
  * ═══════════════════════════════════════════════════════════════════
  *
  *  Board:  ESP32-S3-N16R8 (ESP32-S3-WROOM-1, 16MB Flash, 8MB PSRAM)
@@ -16,11 +16,20 @@
  *   3. Parses received attendance packets and logs them to Serial.
  *   4. Tracks seen packet IDs to suppress duplicates.
  *   5. Blinks the onboard RGB LED to indicate status.
+ *   6. [Phase 4] Accepts JSON relay test packets over GATT.
+ *   7. [Phase 4] Sends ACK notifications back to connected clients.
+ *   8. [Phase 4] Displays gateway status on TFT (if connected).
  *
  *  Phase 1 scope:
  *   - Direct phone → ESP32 BLE communication (no mesh relay yet)
  *   - Serial output only (no Wi-Fi backend yet)
  *   - Duplicate suppression via in-memory packet ID cache
+ *
+ *  Phase 4 additions:
+ *   - JSON test relay packet support (detected by first byte '{')
+ *   - ACK characteristic (NOTIFY) for relay acknowledgement
+ *   - TFT status display (ST7735/ST7789, 128x160)
+ *   - Connected client tracking
  *
  *  Arduino IDE Board Settings:
  *   - Board: ESP32S3 Dev Module
@@ -37,6 +46,37 @@
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 #include <BLEUtils.h>
+#include <BLE2902.h>
+
+// ─── TFT Display (optional — compile with TFT_ENABLED) ─────────
+// Set to 1 if you have a TFT connected, 0 to disable
+#define TFT_ENABLED 1
+
+#if TFT_ENABLED
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7735.h>
+#include <SPI.h>
+
+// ═══════════════════════════════════════════════════════════════
+//  TFT PIN CONFIGURATION — VERIFY YOUR WIRING!
+// ═══════════════════════════════════════════════════════════════
+//
+//  These pins are common defaults for ESP32-S3 boards with SPI TFT.
+//  If your display does not work, check your board's pinout diagram
+//  and update these values accordingly.
+//
+//  Display: 1.8" TFT SPI, 128x160, V1.1
+//  Likely controller: ST7735 (could also be ST7789 for some modules)
+//
+#define TFT_CS    10   // Chip Select
+#define TFT_DC     8   // Data/Command (A0/RS)
+#define TFT_RST    9   // Reset (-1 if connected to ESP32 RST)
+#define TFT_MOSI  11   // SPI MOSI (DIN/SDA)
+#define TFT_SCLK  12   // SPI Clock (SCK/SCL)
+// Backlight: Usually connected to VCC (always on) or a GPIO for dimming
+
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+#endif
 
 // ─── Configuration ───────────────────────────────────────────────
 
@@ -45,6 +85,9 @@
 #define GATEWAY_SERVICE_UUID        "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 #define GATEWAY_STATUS_CHAR_UUID    "a1b2c3d4-e5f6-7890-abcd-ef1234567891"
 #define GATEWAY_ATTENDANCE_CHAR_UUID "a1b2c3d4-e5f6-7890-abcd-ef1234567892"
+
+// Phase 4: ACK characteristic — gateway sends ACK notifications here
+#define GATEWAY_ACK_CHAR_UUID       "a1b2c3d4-e5f6-7890-abcd-ef1234567896"
 
 // Manufacturer ID for our custom attendance packets
 // Using 0xFFFF (reserved/test) — replace with registered ID in production
@@ -75,7 +118,7 @@
 
 // ─── Packet Structure ────────────────────────────────────────────
 //
-// Manufacturer-specific data layout (inside BLE advertisement):
+// PHASE 1 — Manufacturer-specific data layout (inside BLE advertisement):
 //
 // The manufacturer ID (2 bytes, 0xFFFF) is prepended automatically
 // by the BLE stack. Our custom payload starts right after:
@@ -95,6 +138,11 @@
 // ──────────────────────────────────────────────────────────────────
 // Total: 42 bytes payload (+ 2 bytes MFG ID = 44 bytes in adv data)
 //
+// PHASE 4 — JSON test relay packets (over GATT write):
+//
+// Detected by first byte being '{' (0x7B).
+// Format: {"v":1,"t":"TEST_RELAY","pid":"...","oid":"...","sp":"...","p":"...","ttl":N,"hc":N}
+//
 
 // Packet type constants
 #define PKT_TYPE_ATTENDANCE 0x01
@@ -110,7 +158,7 @@
 // ─── Data Structures ────────────────────────────────────────────
 
 struct CachedPacketId {
-    uint32_t packetId;
+    char packetId[16];     // String-based ID (supports both binary hex and Phase 4 IDs)
     unsigned long seenAt;  // millis() timestamp
 };
 
@@ -121,6 +169,9 @@ BLEService*     pService     = nullptr;
 BLEAdvertising* pAdvertising = nullptr;
 BLEScan*        pBLEScan     = nullptr;
 
+// Phase 4: ACK characteristic for notifications
+BLECharacteristic* pAckChar  = nullptr;
+
 // Duplicate suppression cache
 CachedPacketId packetCache[MAX_CACHED_PACKET_IDS];
 int packetCacheCount = 0;
@@ -130,19 +181,96 @@ uint32_t totalPacketsReceived   = 0;
 uint32_t validPacketsReceived   = 0;
 uint32_t duplicatePacketsCount  = 0;
 uint32_t invalidPacketsCount    = 0;
+uint32_t phase4PacketsReceived  = 0;
+uint32_t acksGenerated          = 0;
+
+// Connection tracking
+int connectedClients = 0;
 
 // Display settings
 bool showUnnamedDevices         = true;  // Toggle with 'u' in serial monitor
 
+// Phase 4: Last received packet info (for TFT display)
+char lastOriginId[16] = "";
+char lastPlatform[12] = "";
+char lastPayload[32]  = "";
+char lastPacketId[16] = "";
+int  lastHopCount     = 0;
+int  lastTtl          = 0;
+
+// TFT display state
+enum GatewayState {
+    STATE_BOOTING,
+    STATE_BLE_READY,
+    STATE_BLE_CONNECTED,
+    STATE_RECEIVING,
+    STATE_PROCESSING,
+    STATE_ACK_SENT,
+    STATE_ERROR
+};
+GatewayState currentState = STATE_BOOTING;
+
 // ─── Forward Declarations ────────────────────────────────────────
 
+bool isPacketIdDuplicate(const char* packetId);
+void cachePacketIdStr(const char* packetId);
 bool isPacketDuplicate(uint32_t packetId);
 void cachePacketId(uint32_t packetId);
 void cleanExpiredCache();
 void processAttendancePacket(const uint8_t* data, size_t length, int rssi, BLEAddress addr);
+void processPhase4Packet(const uint8_t* data, size_t length);
+void sendAck(const char* packetId, const char* status);
 void printPacketHex(const uint8_t* data, size_t length);
 void blinkLed(uint8_t r, uint8_t g, uint8_t b, int times, int delayMs);
 void printDiagnostics();
+void updateTftDisplay();
+void tftShowState(GatewayState state);
+
+// ─── Simple JSON Parser Helpers ─────────────────────────────────
+// Minimal parser for our known-format Phase 4 JSON packets.
+// Avoids pulling in a full JSON library (ArduinoJson) for this test protocol.
+
+bool jsonExtractString(const char* json, const char* key, char* out, size_t outLen) {
+    char searchKey[32];
+    snprintf(searchKey, sizeof(searchKey), "\"%s\":\"", key);
+    const char* start = strstr(json, searchKey);
+    if (!start) {
+        // Try with space after colon
+        snprintf(searchKey, sizeof(searchKey), "\"%s\": \"", key);
+        start = strstr(json, searchKey);
+    }
+    if (!start) return false;
+
+    start = strchr(start, ':');
+    if (!start) return false;
+    start++; // skip ':'
+    while (*start == ' ') start++; // skip spaces
+    if (*start != '"') return false;
+    start++; // skip opening quote
+
+    const char* end = strchr(start, '"');
+    if (!end) return false;
+
+    size_t len = end - start;
+    if (len >= outLen) len = outLen - 1;
+    strncpy(out, start, len);
+    out[len] = '\0';
+    return true;
+}
+
+int jsonExtractInt(const char* json, const char* key, int defaultVal) {
+    char searchKey[32];
+    snprintf(searchKey, sizeof(searchKey), "\"%s\":", key);
+    const char* start = strstr(json, searchKey);
+    if (!start) return defaultVal;
+
+    start = strchr(start, ':');
+    if (!start) return defaultVal;
+    start++; // skip ':'
+    while (*start == ' ') start++; // skip spaces
+
+    return atoi(start);
+}
 
 // ─── BLE Scan Callbacks ─────────────────────────────────────────
 
@@ -185,14 +313,21 @@ class GatewayScanCallbacks : public BLEAdvertisedDeviceCallbacks {
 
 class GatewayServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) override {
-        Serial.println("[CONN] Device connected");
+        connectedClients++;
+        Serial.printf("[BLE] Connected (clients: %d)\n", connectedClients);
         blinkLed(0, 20, 0, 2, 100);
+        currentState = STATE_BLE_CONNECTED;
+        updateTftDisplay();
         // Restart advertising so other devices can discover us
         BLEDevice::startAdvertising();
     }
 
     void onDisconnect(BLEServer* pServer) override {
-        Serial.println("[CONN] Device disconnected");
+        connectedClients--;
+        if (connectedClients < 0) connectedClients = 0;
+        Serial.printf("[BLE] Disconnected (clients: %d)\n", connectedClients);
+        currentState = (connectedClients > 0) ? STATE_BLE_CONNECTED : STATE_BLE_READY;
+        updateTftDisplay();
         // Restart advertising after disconnect
         BLEDevice::startAdvertising();
     }
@@ -205,12 +340,25 @@ class AttendanceCharCallbacks : public BLECharacteristicCallbacks {
         String value = pCharacteristic->getValue();
         size_t len = value.length();
 
-        if (len < 6) {
+        if (len < 2) {
             Serial.printf("[GATT] Received write too short: %d bytes\n", (int)len);
             return;
         }
 
         const uint8_t* data = (const uint8_t*)value.c_str();
+
+        // Phase 4: Detect JSON packets (first byte is '{')
+        if (data[0] == 0x7B) {  // '{'
+            Serial.printf("[GATT] Received Phase 4 JSON packet: %d bytes\n", (int)len);
+            processPhase4Packet(data, len);
+            return;
+        }
+
+        // Phase 1: Binary attendance packet
+        if (len < 6) {
+            Serial.printf("[GATT] Received binary write too short: %d bytes\n", (int)len);
+            return;
+        }
 
         // Check magic bytes
         if (data[0] != ATTENDANCE_MAGIC_BYTE_0 || data[1] != ATTENDANCE_MAGIC_BYTE_1) {
@@ -229,7 +377,139 @@ class AttendanceCharCallbacks : public BLECharacteristicCallbacks {
     }
 };
 
-// ─── Packet Processing ──────────────────────────────────────────
+// ─── Phase 4 JSON Packet Processing ─────────────────────────────
+
+void processPhase4Packet(const uint8_t* data, size_t length) {
+    totalPacketsReceived++;
+    phase4PacketsReceived++;
+
+    currentState = STATE_RECEIVING;
+    updateTftDisplay();
+
+    // Null-terminate the JSON string for parsing
+    char jsonBuf[256];
+    size_t copyLen = (length < sizeof(jsonBuf) - 1) ? length : sizeof(jsonBuf) - 1;
+    memcpy(jsonBuf, data, copyLen);
+    jsonBuf[copyLen] = '\0';
+
+    // Extract fields
+    char packetType[16] = "";
+    char packetId[16]   = "";
+    char originId[16]   = "";
+    char platform[12]   = "";
+    char payload[64]    = "";
+
+    int version  = jsonExtractInt(jsonBuf, "v", -1);
+    jsonExtractString(jsonBuf, "t", packetType, sizeof(packetType));
+    jsonExtractString(jsonBuf, "pid", packetId, sizeof(packetId));
+    jsonExtractString(jsonBuf, "oid", originId, sizeof(originId));
+    jsonExtractString(jsonBuf, "sp", platform, sizeof(platform));
+    jsonExtractString(jsonBuf, "p", payload, sizeof(payload));
+    int ttl      = jsonExtractInt(jsonBuf, "ttl", -1);
+    int hopCount = jsonExtractInt(jsonBuf, "hc", -1);
+
+    // Validate required fields
+    if (version != 1) {
+        Serial.printf("[RX] Invalid version: %d\n", version);
+        invalidPacketsCount++;
+        sendAck(packetId, "INVALID");
+        return;
+    }
+
+    if (strcmp(packetType, "TEST_RELAY") != 0) {
+        Serial.printf("[RX] Unknown packet type: %s\n", packetType);
+        invalidPacketsCount++;
+        sendAck(packetId, "INVALID");
+        return;
+    }
+
+    if (strlen(packetId) == 0) {
+        Serial.println("[RX] Missing packet ID");
+        invalidPacketsCount++;
+        sendAck("", "INVALID");
+        return;
+    }
+
+    // Duplicate check
+    if (isPacketIdDuplicate(packetId)) {
+        duplicatePacketsCount++;
+        Serial.printf("[RX] DUPLICATE packet: %s (suppressed)\n", packetId);
+        sendAck(packetId, "DUPLICATE");
+        return;
+    }
+
+    // Cache the packet ID
+    cachePacketIdStr(packetId);
+
+    // TTL check
+    if (ttl <= 0) {
+        Serial.printf("[RX] TTL expired for packet: %s\n", packetId);
+        sendAck(packetId, "REJECTED");
+        return;
+    }
+
+    // Valid packet — process it
+    validPacketsReceived++;
+    currentState = STATE_PROCESSING;
+    updateTftDisplay();
+
+    // Update last packet info for TFT display
+    strncpy(lastOriginId, originId, sizeof(lastOriginId) - 1);
+    strncpy(lastPlatform, platform, sizeof(lastPlatform) - 1);
+    strncpy(lastPayload, payload, sizeof(lastPayload) - 1);
+    strncpy(lastPacketId, packetId, sizeof(lastPacketId) - 1);
+    lastHopCount = hopCount;
+    lastTtl = ttl;
+
+    // Log to Serial
+    Serial.println();
+    Serial.println("======================================================");
+    Serial.println("         PHASE 4 — TEST RELAY PACKET RECEIVED");
+    Serial.println("======================================================");
+    Serial.printf("  [RX] TEST_RELAY\n");
+    Serial.printf("  [RX] packetId=%s\n", packetId);
+    Serial.printf("  [RX] origin=%s\n", originId);
+    Serial.printf("  [RX] platform=%s\n", platform);
+    Serial.printf("  [RX] payload=%s\n", payload);
+    Serial.printf("  [RX] hopCount=%d\n", hopCount);
+    Serial.printf("  [RX] ttl=%d\n", ttl);
+    Serial.println("------------------------------------------------------");
+
+    // Send ACK
+    sendAck(packetId, "RECEIVED");
+    acksGenerated++;
+
+    currentState = STATE_ACK_SENT;
+    updateTftDisplay();
+
+    // Visual feedback — cyan flash for Phase 4 packets
+    blinkLed(0, 15, 20, 3, 80);
+
+    // After short delay, return to connected/ready state
+    delay(500);
+    currentState = (connectedClients > 0) ? STATE_BLE_CONNECTED : STATE_BLE_READY;
+    updateTftDisplay();
+}
+
+// ─── ACK Generation ─────────────────────────────────────────────
+
+void sendAck(const char* packetId, const char* status) {
+    // Build ACK JSON
+    char ackJson[128];
+    snprintf(ackJson, sizeof(ackJson),
+        "{\"v\":1,\"t\":\"ACK\",\"pid\":\"%s\",\"gid\":\"%s\",\"s\":\"%s\"}",
+        packetId, GATEWAY_DEVICE_NAME, status);
+
+    Serial.printf("  [ACK] %s → %s\n", packetId, status);
+
+    // Send via NOTIFY if clients are subscribed
+    if (pAckChar != nullptr && connectedClients > 0) {
+        pAckChar->setValue(ackJson);
+        pAckChar->notify();
+    }
+}
+
+// ─── Phase 1 Packet Processing (unchanged) ──────────────────────
 
 void processAttendancePacket(const uint8_t* data, size_t length, int rssi, BLEAddress addr) {
     // Validate magic bytes
@@ -333,14 +613,28 @@ void processAttendancePacket(const uint8_t* data, size_t length, int rssi, BLEAd
 
     // Visual feedback — green flash
     blinkLed(0, 20, 0, 3, 80);
+
+    // Update TFT for Phase 1 packets too
+    snprintf(lastPacketId, sizeof(lastPacketId), "%08X", packetId);
+    strncpy(lastOriginId, addr.toString().c_str(), sizeof(lastOriginId) - 1);
+    strncpy(lastPlatform, "binary", sizeof(lastPlatform) - 1);
+    strncpy(lastPayload, "(P1 binary)", sizeof(lastPayload) - 1);
+    lastHopCount = (length >= 18) ? data[17] : 0;
+    lastTtl = (length >= 17) ? data[16] : 0;
+    currentState = STATE_PROCESSING;
+    updateTftDisplay();
+    delay(300);
+    currentState = (connectedClients > 0) ? STATE_BLE_CONNECTED : STATE_BLE_READY;
+    updateTftDisplay();
 }
 
 // ─── Duplicate Suppression ───────────────────────────────────────
 
-bool isPacketDuplicate(uint32_t packetId) {
+// String-based duplicate check (Phase 4)
+bool isPacketIdDuplicate(const char* packetId) {
     unsigned long now = millis();
     for (int i = 0; i < packetCacheCount; i++) {
-        if (packetCache[i].packetId == packetId) {
+        if (strcmp(packetCache[i].packetId, packetId) == 0) {
             if ((now - packetCache[i].seenAt) < PACKET_CACHE_EXPIRY_MS) {
                 return true;
             }
@@ -349,11 +643,12 @@ bool isPacketDuplicate(uint32_t packetId) {
     return false;
 }
 
-void cachePacketId(uint32_t packetId) {
+void cachePacketIdStr(const char* packetId) {
     cleanExpiredCache();
 
     if (packetCacheCount < MAX_CACHED_PACKET_IDS) {
-        packetCache[packetCacheCount].packetId = packetId;
+        strncpy(packetCache[packetCacheCount].packetId, packetId, 15);
+        packetCache[packetCacheCount].packetId[15] = '\0';
         packetCache[packetCacheCount].seenAt = millis();
         packetCacheCount++;
     } else {
@@ -366,9 +661,23 @@ void cachePacketId(uint32_t packetId) {
                 oldestIdx = i;
             }
         }
-        packetCache[oldestIdx].packetId = packetId;
+        strncpy(packetCache[oldestIdx].packetId, packetId, 15);
+        packetCache[oldestIdx].packetId[15] = '\0';
         packetCache[oldestIdx].seenAt = millis();
     }
+}
+
+// Binary duplicate check (Phase 1 backward compatibility)
+bool isPacketDuplicate(uint32_t packetId) {
+    char idStr[16];
+    snprintf(idStr, sizeof(idStr), "%08X", packetId);
+    return isPacketIdDuplicate(idStr);
+}
+
+void cachePacketId(uint32_t packetId) {
+    char idStr[16];
+    snprintf(idStr, sizeof(idStr), "%08X", packetId);
+    cachePacketIdStr(idStr);
 }
 
 void cleanExpiredCache() {
@@ -409,13 +718,155 @@ void printDiagnostics() {
     Serial.printf("| Uptime:           %lu seconds\n", millis() / 1000);
     Serial.printf("| Total received:   %u packets\n", totalPacketsReceived);
     Serial.printf("| Valid:            %u packets\n", validPacketsReceived);
+    Serial.printf("| Phase 4 (JSON):   %u packets\n", phase4PacketsReceived);
     Serial.printf("| Duplicates:       %u packets\n", duplicatePacketsCount);
     Serial.printf("| Invalid:          %u packets\n", invalidPacketsCount);
+    Serial.printf("| ACKs sent:        %u\n", acksGenerated);
+    Serial.printf("| Connected clients: %d\n", connectedClients);
     Serial.printf("| Cache entries:    %d / %d\n", packetCacheCount, MAX_CACHED_PACKET_IDS);
     Serial.printf("| Free heap:        %u bytes\n", ESP.getFreeHeap());
     Serial.printf("| Free PSRAM:       %u bytes\n", ESP.getFreePsram());
     Serial.println("+-----------------------------------------------------+");
     Serial.println();
+}
+
+// ─── TFT Display Functions ──────────────────────────────────────
+
+#if TFT_ENABLED
+void tftInit() {
+    // Try ST7735S initialization (most common for 1.8" 128x160 modules)
+    tft.initR(INITR_BLACKTAB);
+    tft.setRotation(0);  // Portrait
+    tft.fillScreen(ST77XX_BLACK);
+    tft.setTextWrap(true);
+}
+
+void tftClear() {
+    tft.fillScreen(ST77XX_BLACK);
+    tft.setCursor(0, 0);
+}
+
+void tftHeader() {
+    tft.setTextSize(1);
+    tft.setTextColor(ST77XX_CYAN);
+    tft.println("BLE GATEWAY");
+    tft.setTextColor(ST77XX_WHITE);
+    tft.println("----------------");
+}
+#endif
+
+void tftShowState(GatewayState state) {
+#if TFT_ENABLED
+    tftClear();
+    tftHeader();
+
+    tft.setTextSize(1);
+
+    switch (state) {
+        case STATE_BOOTING:
+            tft.setTextColor(ST77XX_YELLOW);
+            tft.println("STATUS: BOOTING");
+            tft.setTextColor(ST77XX_WHITE);
+            tft.println();
+            tft.println("Initializing...");
+            break;
+
+        case STATE_BLE_READY:
+            tft.setTextColor(ST77XX_GREEN);
+            tft.println("STATUS: READY");
+            tft.setTextColor(ST77XX_WHITE);
+            tft.println();
+            tft.println("BLE: ADVERTISING");
+            tft.printf("CLIENTS: %d\n", connectedClients);
+            tft.println();
+            tft.printf("RX: %u\n", totalPacketsReceived);
+            tft.printf("VALID: %u\n", validPacketsReceived);
+            tft.printf("P4: %u\n", phase4PacketsReceived);
+            tft.printf("DUP: %u\n", duplicatePacketsCount);
+            tft.printf("ACK: %u\n", acksGenerated);
+            if (strlen(lastPacketId) > 0) {
+                tft.println();
+                tft.setTextColor(ST77XX_YELLOW);
+                tft.println("LAST:");
+                tft.setTextColor(ST77XX_WHITE);
+                tft.println(lastOriginId);
+                tft.printf("MSG: %.16s\n", lastPayload);
+                tft.printf("HOP: %d TTL: %d\n", lastHopCount, lastTtl);
+            }
+            break;
+
+        case STATE_BLE_CONNECTED:
+            tft.setTextColor(ST77XX_GREEN);
+            tft.println("STATUS: CONNECTED");
+            tft.setTextColor(ST77XX_WHITE);
+            tft.println();
+            tft.printf("CLIENTS: %d\n", connectedClients);
+            tft.println();
+            tft.printf("RX: %u\n", totalPacketsReceived);
+            tft.printf("VALID: %u\n", validPacketsReceived);
+            tft.printf("P4: %u\n", phase4PacketsReceived);
+            tft.printf("DUP: %u\n", duplicatePacketsCount);
+            tft.printf("ACK: %u\n", acksGenerated);
+            if (strlen(lastPacketId) > 0) {
+                tft.println();
+                tft.setTextColor(ST77XX_YELLOW);
+                tft.println("LAST:");
+                tft.setTextColor(ST77XX_WHITE);
+                tft.println(lastOriginId);
+                tft.printf("MSG: %.16s\n", lastPayload);
+                tft.printf("HOP: %d TTL: %d\n", lastHopCount, lastTtl);
+            }
+            break;
+
+        case STATE_RECEIVING:
+            tft.setTextColor(ST77XX_BLUE);
+            tft.println("STATUS: RECEIVING");
+            tft.setTextColor(ST77XX_WHITE);
+            tft.println();
+            tft.println("RX PACKET...");
+            break;
+
+        case STATE_PROCESSING:
+            tft.setTextColor(ST77XX_MAGENTA);
+            tft.println("STATUS: PROCESSING");
+            tft.setTextColor(ST77XX_WHITE);
+            tft.println();
+            tft.printf("ID: %s\n", lastPacketId);
+            tft.printf("FROM: %s\n", lastOriginId);
+            tft.printf("PLAT: %s\n", lastPlatform);
+            tft.printf("MSG: %.16s\n", lastPayload);
+            tft.printf("HOP: %d TTL: %d\n", lastHopCount, lastTtl);
+            break;
+
+        case STATE_ACK_SENT:
+            tft.setTextColor(ST77XX_GREEN);
+            tft.println("STATUS: ACK SENT");
+            tft.setTextColor(ST77XX_WHITE);
+            tft.println();
+            tft.printf("PID: %s\n", lastPacketId);
+            tft.printf("FROM: %s\n", lastOriginId);
+            tft.printf("MSG: %.16s\n", lastPayload);
+            break;
+
+        case STATE_ERROR:
+            tft.setTextColor(ST77XX_RED);
+            tft.println("STATUS: ERROR");
+            tft.setTextColor(ST77XX_WHITE);
+            tft.println();
+            tft.printf("INV: %u\n", invalidPacketsCount);
+            break;
+    }
+
+    // Footer: WiFi status (placeholder for future)
+    tft.println();
+    tft.setTextColor(0x7BEF);  // Gray
+    tft.println("WiFi: N/A");
+    tft.println("Backend: N/A");
+#endif
+}
+
+void updateTftDisplay() {
+    tftShowState(currentState);
 }
 
 // ─── Scan Complete Callback ──────────────────────────────────────
@@ -462,7 +913,7 @@ void setup() {
     Serial.println();
     Serial.println("=======================================================");
     Serial.println("  BLE Mesh Attendance — Classroom Gateway");
-    Serial.println("  Phase 1: BLE Advertisement + Scan");
+    Serial.println("  Phase 1 + Phase 4: BLE + Relay + TFT");
     Serial.println("  Board: ESP32-S3-N16R8");
     Serial.println("  Framework: Arduino Core 3.3.x");
     Serial.println("=======================================================");
@@ -471,6 +922,17 @@ void setup() {
     // Initialize LED — blue = initializing
     neopixelWrite(STATUS_LED_PIN, 0, 0, 20);
     delay(500);
+
+    // ─── Initialize TFT ───
+#if TFT_ENABLED
+    Serial.println("[INIT] Initializing TFT display...");
+    tftInit();
+    currentState = STATE_BOOTING;
+    tftShowState(currentState);
+    Serial.println("[INIT] > TFT initialized (ST7735 128x160)");
+#else
+    Serial.println("[INIT] TFT display disabled (TFT_ENABLED=0)");
+#endif
 
     // ─── Initialize BLE ───
     Serial.println("[INIT] Initializing BLE...");
@@ -488,21 +950,29 @@ void setup() {
     pServer->setCallbacks(new GatewayServerCallbacks());
 
     // Create our gateway service
-    pService = pServer->createService(GATEWAY_SERVICE_UUID);
+    pService = pServer->createService(BLEUUID(GATEWAY_SERVICE_UUID), 20);  // 20 handles for more characteristics
 
     // Status characteristic — readable by phones to confirm gateway is active
     BLECharacteristic* pStatusChar = pService->createCharacteristic(
         GATEWAY_STATUS_CHAR_UUID,
         BLECharacteristic::PROPERTY_READ
     );
-    pStatusChar->setValue("GATEWAY_ACTIVE_v1");
+    pStatusChar->setValue("GATEWAY_ACTIVE_v1_P4");
 
     // Attendance characteristic — writable by phones to submit attendance via GATT
+    // Accepts both Phase 1 binary and Phase 4 JSON packets
     BLECharacteristic* pAttendanceChar = pService->createCharacteristic(
         GATEWAY_ATTENDANCE_CHAR_UUID,
         BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR
     );
     pAttendanceChar->setCallbacks(new AttendanceCharCallbacks());
+
+    // Phase 4: ACK characteristic — gateway notifies connected clients with ACK
+    pAckChar = pService->createCharacteristic(
+        GATEWAY_ACK_CHAR_UUID,
+        BLECharacteristic::PROPERTY_NOTIFY
+    );
+    pAckChar->addDescriptor(new BLE2902());  // Client Characteristic Configuration Descriptor
 
     pService->start();
 
@@ -522,6 +992,7 @@ void setup() {
     BLEDevice::startAdvertising();
     Serial.println("[INIT] > Gateway is now advertising");
     Serial.printf("[INIT] > Service UUID: %s\n", GATEWAY_SERVICE_UUID);
+    Serial.printf("[INIT] > ACK UUID:     %s\n", GATEWAY_ACK_CHAR_UUID);
 
     // ─── Configure BLE Scanning ───
     Serial.println("[INIT] Configuring BLE scanner...");
@@ -538,9 +1009,13 @@ void setup() {
     delay(500);
     neopixelWrite(STATUS_LED_PIN, 0, 0, 0);
 
+    currentState = STATE_BLE_READY;
+    updateTftDisplay();
+
     Serial.println();
     Serial.println("=======================================================");
     Serial.println("  GATEWAY READY — Scanning for attendance packets...");
+    Serial.println("  Phase 4: JSON relay packets supported");
     Serial.println("  Serial commands: d=diagnostics r=reset s=scan h=help");
     Serial.println("=======================================================");
     Serial.println();
@@ -553,8 +1028,10 @@ void setup() {
 
 unsigned long lastDiagnosticTime = 0;
 unsigned long lastScanRestart   = 0;
+unsigned long lastTftRefresh    = 0;
 const unsigned long DIAGNOSTIC_INTERVAL_MS = 30000;  // Print diagnostics every 30s
 const unsigned long SCAN_RESTART_MS        = 6000;    // Restart scan every 6s
+const unsigned long TFT_REFRESH_MS         = 10000;   // Refresh TFT every 10s
 
 void loop() {
     unsigned long now = millis();
@@ -578,6 +1055,12 @@ void loop() {
         neopixelWrite(STATUS_LED_PIN, 0, 0, 0);
     }
 
+    // ─── Periodic TFT refresh ───
+    if (now - lastTftRefresh > TFT_REFRESH_MS) {
+        updateTftDisplay();
+        lastTftRefresh = now;
+    }
+
     // ─── Handle serial commands ───
     if (Serial.available()) {
         char cmd = Serial.read();
@@ -593,7 +1076,16 @@ void loop() {
                 validPacketsReceived = 0;
                 duplicatePacketsCount = 0;
                 invalidPacketsCount = 0;
+                phase4PacketsReceived = 0;
+                acksGenerated = 0;
                 packetCacheCount = 0;
+                lastOriginId[0] = '\0';
+                lastPlatform[0] = '\0';
+                lastPayload[0] = '\0';
+                lastPacketId[0] = '\0';
+                lastHopCount = 0;
+                lastTtl = 0;
+                updateTftDisplay();
                 break;
             case 's':
             case 'S':
