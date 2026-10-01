@@ -45,12 +45,11 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.27.x'
           channel: 'stable'
           cache: true
 
       - name: Install Dependencies
-        run: flutter pub get
+        run: flutter pub get || flutter pub upgrade
         working-directory: apps/mobile
 
       - name: Run Code Analysis
