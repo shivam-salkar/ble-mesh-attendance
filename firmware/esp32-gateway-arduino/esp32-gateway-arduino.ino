@@ -170,7 +170,9 @@ BLEAdvertising* pAdvertising = nullptr;
 BLEScan*        pBLEScan     = nullptr;
 
 // Phase 4: ACK characteristic for notifications
-BLECharacteristic* pAckChar  = nullptr;
+BLECharacteristic* pAckChar    = nullptr;
+// Status characteristic — updated with connected client count
+BLECharacteristic* pStatusChar = nullptr;
 
 // Duplicate suppression cache
 CachedPacketId packetCache[MAX_CACHED_PACKET_IDS];
@@ -317,6 +319,14 @@ class GatewayServerCallbacks : public BLEServerCallbacks {
         Serial.printf("[BLE] Connected (clients: %d)\n", connectedClients);
         blinkLed(0, 20, 0, 2, 100);
         currentState = STATE_BLE_CONNECTED;
+        // Update status characteristic so phones can read peer count
+        if (pStatusChar != nullptr) {
+            char statusJson[64];
+            snprintf(statusJson, sizeof(statusJson),
+                "{\"clients\":%d,\"uptime\":%lu}", connectedClients, millis()/1000);
+            pStatusChar->setValue(statusJson);
+            pStatusChar->notify();
+        }
         updateTftDisplay();
         // Restart advertising so other devices can discover us
         BLEDevice::startAdvertising();
@@ -327,6 +337,14 @@ class GatewayServerCallbacks : public BLEServerCallbacks {
         if (connectedClients < 0) connectedClients = 0;
         Serial.printf("[BLE] Disconnected (clients: %d)\n", connectedClients);
         currentState = (connectedClients > 0) ? STATE_BLE_CONNECTED : STATE_BLE_READY;
+        // Update status characteristic
+        if (pStatusChar != nullptr) {
+            char statusJson[64];
+            snprintf(statusJson, sizeof(statusJson),
+                "{\"clients\":%d,\"uptime\":%lu}", connectedClients, millis()/1000);
+            pStatusChar->setValue(statusJson);
+            pStatusChar->notify();
+        }
         updateTftDisplay();
         // Restart advertising after disconnect
         BLEDevice::startAdvertising();
@@ -952,12 +970,13 @@ void setup() {
     // Create our gateway service
     pService = pServer->createService(BLEUUID(GATEWAY_SERVICE_UUID), 20);  // 20 handles for more characteristics
 
-    // Status characteristic — readable by phones to confirm gateway is active
-    BLECharacteristic* pStatusChar = pService->createCharacteristic(
+    // Status characteristic — readable + notify by phones to see gateway state
+    pStatusChar = pService->createCharacteristic(
         GATEWAY_STATUS_CHAR_UUID,
-        BLECharacteristic::PROPERTY_READ
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
     );
-    pStatusChar->setValue("GATEWAY_ACTIVE_v1_P4");
+    pStatusChar->addDescriptor(new BLE2902());
+    pStatusChar->setValue("{\"clients\":0,\"uptime\":0}");
 
     // Attendance characteristic — writable by phones to submit attendance via GATT
     // Accepts both Phase 1 binary and Phase 4 JSON packets
@@ -985,8 +1004,8 @@ void setup() {
 
     // Configure advertising parameters
     pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06);  // Connection interval hints
-    pAdvertising->setMaxPreferred(0x12);
+    pAdvertising->setMinPreferred(0x12);  // Min connection interval: 22.5ms
+    pAdvertising->setMaxPreferred(0x40);  // Max connection interval: 80ms (more reliable)
 
     // Start advertising
     BLEDevice::startAdvertising();
@@ -999,8 +1018,10 @@ void setup() {
     pBLEScan = BLEDevice::getScan();
     pBLEScan->setAdvertisedDeviceCallbacks(new GatewayScanCallbacks(), true);  // true = wantDuplicates
     pBLEScan->setActiveScan(true);     // Active scan gets scan responses
-    pBLEScan->setInterval(100);        // Scan interval (in 0.625ms units = 62.5ms)
-    pBLEScan->setWindow(99);           // Scan window (in 0.625ms units) — near-continuous
+    // NOTE: Scan window/interval are in units of 0.625ms.
+    // Use moderate duty cycle to leave radio time for GATT connections.
+    pBLEScan->setInterval(160);        // 100ms scan interval
+    pBLEScan->setWindow(48);           // 30ms scan window (~30% duty cycle)
 
     Serial.println("[INIT] > Scanner configured");
 
@@ -1037,9 +1058,22 @@ void loop() {
     unsigned long now = millis();
 
     // ─── Restart scanning if needed ───
-    if (!pBLEScan->isScanning() && (now - lastScanRestart > SCAN_RESTART_MS)) {
+    // When clients are connected, scan less aggressively to avoid
+    // starving the BLE radio of time to service GATT connections.
+    unsigned long effectiveScanRestart = (connectedClients > 0) ? 10000 : SCAN_RESTART_MS;
+    int effectiveScanDuration = (connectedClients > 0) ? 3 : SCAN_DURATION_SECS;
+
+    if (!pBLEScan->isScanning() && (now - lastScanRestart > effectiveScanRestart)) {
+        // Reduce scan duty cycle further when clients are connected
+        if (connectedClients > 0) {
+            pBLEScan->setInterval(320);   // 200ms interval when connected
+            pBLEScan->setWindow(32);      // 20ms window (~10% duty)
+        } else {
+            pBLEScan->setInterval(160);   // 100ms interval default
+            pBLEScan->setWindow(48);      // 30ms window (~30% duty)
+        }
         pBLEScan->clearResults();  // Free memory from previous scan
-        pBLEScan->start(SCAN_DURATION_SECS, scanCompleteCB, false);
+        pBLEScan->start(effectiveScanDuration, scanCompleteCB, false);
         lastScanRestart = now;
     }
 

@@ -82,6 +82,10 @@ class BleService extends ChangeNotifier {
 
   StreamSubscription? _scanSubscription;
   StreamSubscription? _ackSubscription;
+  StreamSubscription? _statusSubscription;
+
+  // Gateway peer tracking — how many clients are connected to the gateway
+  int _gatewayPeerCount = 0;
 
   // ─── Getters ───────────────────────────────────────────────────
 
@@ -93,6 +97,7 @@ class BleService extends ChangeNotifier {
   bool get isConnected => _isConnected;
   String get connectedDeviceName => _connectedDeviceName;
   String get bleStatus => _bleStatus;
+  int get gatewayPeerCount => _gatewayPeerCount;
   List<BleEvent> get events => List.unmodifiable(_events);
   List<DiscoveredDevice> get discoveredDevices =>
       List.unmodifiable(_discoveredDevices);
@@ -213,6 +218,8 @@ class BleService extends ChangeNotifier {
           _isConnected = false;
           _connectedDevice = null;
           _connectedDeviceName = '';
+          _gatewayPeerCount = 0;
+          _statusSubscription?.cancel();
           _bleStatus = 'Disconnected';
           _addEvent(BleEventType.disconnect, 'Disconnected from ${device.name}');
           notifyListeners();
@@ -227,6 +234,7 @@ class BleService extends ChangeNotifier {
       // Subscribe to ACK notifications if this is a gateway
       if (device.isGateway) {
         _subscribeToAck(services);
+        _subscribeToGatewayStatus(services);
       }
 
       notifyListeners();
@@ -248,6 +256,7 @@ class BleService extends ChangeNotifier {
       _connectedDevice = null;
       _connectedDeviceName = '';
       _isConnected = false;
+      _gatewayPeerCount = 0;
       _bleStatus = 'Disconnected';
       _addEvent(BleEventType.disconnect, 'Disconnected from $name');
       notifyListeners();
@@ -279,6 +288,43 @@ class BleService extends ChangeNotifier {
       _addEvent(BleEventType.ack, '$ack');
     } catch (e) {
       _addEvent(BleEventType.error, 'ACK parse error: $e');
+    }
+  }
+
+  /// Subscribe to the gateway's status characteristic to track peer count.
+  void _subscribeToGatewayStatus(List<BluetoothService> services) {
+    for (final service in services) {
+      if (service.uuid == BleUuids.gatewayService) {
+        for (final char in service.characteristics) {
+          if (char.uuid == BleUuids.gatewayStatus) {
+            _addEvent(BleEventType.info, 'Subscribing to gateway status');
+            char.setNotifyValue(true);
+            _statusSubscription?.cancel();
+            _statusSubscription = char.onValueReceived.listen((value) {
+              _handleGatewayStatus(value);
+            });
+            // Also do an initial read
+            char.read().then((value) {
+              _handleGatewayStatus(value);
+            }).catchError((_) {});
+          }
+        }
+      }
+    }
+  }
+
+  void _handleGatewayStatus(List<int> data) {
+    try {
+      final jsonStr = utf8.decode(data);
+      final json = jsonDecode(jsonStr) as Map<String, dynamic>;
+      final clients = json['clients'] as int? ?? 0;
+      if (clients != _gatewayPeerCount) {
+        _gatewayPeerCount = clients;
+        _addEvent(BleEventType.info, 'Gateway reports $clients connected client(s)');
+        notifyListeners();
+      }
+    } catch (e) {
+      // Might be old-format string "GATEWAY_ACTIVE_v1_P4", ignore
     }
   }
 
@@ -424,6 +470,7 @@ class BleService extends ChangeNotifier {
   void dispose() {
     _scanSubscription?.cancel();
     _ackSubscription?.cancel();
+    _statusSubscription?.cancel();
     _connectedDevice?.disconnect();
     if (_relayMode) {
       FlutterBlePeripheral().stop();

@@ -265,31 +265,53 @@ class _BleTestScreenState extends State<BleTestScreen> {
       color: Colors.green.withValues(alpha: 0.1),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Icon(Icons.link, color: Colors.green, size: 20),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Connected to ${_bleService.connectedDeviceName}',
-                    style: const TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                const Icon(Icons.link, color: Colors.green, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Connected to ${_bleService.connectedDeviceName}',
+                        style: const TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.bold),
+                      ),
+                      const Text(
+                        'Ready to send packets',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
+                      ),
+                    ],
                   ),
-                  const Text(
-                    'Ready to send packets',
-                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                TextButton(
+                  onPressed: _bleService.disconnect,
+                  child: const Text('Disconnect',
+                      style: TextStyle(fontSize: 11, color: Colors.red)),
+                ),
+              ],
+            ),
+            if (_bleService.gatewayPeerCount > 0) ...[
+              const Divider(height: 16),
+              Row(
+                children: [
+                  Icon(Icons.people, size: 18, color: colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Gateway Peers: ${_bleService.gatewayPeerCount} device(s) connected',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: colorScheme.primary,
+                    ),
                   ),
                 ],
               ),
-            ),
-            TextButton(
-              onPressed: _bleService.disconnect,
-              child: const Text('Disconnect',
-                  style: TextStyle(fontSize: 11, color: Colors.red)),
-            ),
+            ],
           ],
         ),
       ),
@@ -302,19 +324,50 @@ class _BleTestScreenState extends State<BleTestScreen> {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.repeat, size: 18, color: colorScheme.primary),
-            const SizedBox(width: 8),
-            const Text(
-              'Relay Mode',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                Icon(Icons.repeat, size: 18, color: colorScheme.primary),
+                const SizedBox(width: 8),
+                const Text(
+                  'Relay Mode',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Switch(
+                  value: _bleService.relayMode,
+                  onChanged: (_) => _bleService.toggleRelayMode(),
+                ),
+              ],
             ),
-            const Spacer(),
-            Switch(
-              value: _bleService.relayMode,
-              onChanged: (_) => _bleService.toggleRelayMode(),
-            ),
+            if (_bleService.relayMode) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(
+                    _bleService.isAdvertising
+                        ? Icons.cell_tower
+                        : Icons.signal_wifi_off,
+                    size: 14,
+                    color: _bleService.isAdvertising
+                        ? Colors.green
+                        : Colors.grey,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _bleService.isAdvertising
+                        ? 'Advertising — visible to nearby scanners'
+                        : 'Not advertising',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
