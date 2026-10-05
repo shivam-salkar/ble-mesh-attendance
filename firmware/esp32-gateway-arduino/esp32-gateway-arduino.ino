@@ -49,8 +49,8 @@
 #include <BLE2902.h>
 
 // ─── TFT Display (optional — compile with TFT_ENABLED) ─────────
-// Set to 1 if you have a TFT connected, 0 to disable
-#define TFT_ENABLED 1
+// Set to 1 if you have a TFT connected (requires Adafruit GFX + ST7735 libraries), 0 to disable
+#define TFT_ENABLED 0
 
 #if TFT_ENABLED
 #include <Adafruit_GFX.h>
@@ -212,6 +212,22 @@ enum GatewayState {
 };
 GatewayState currentState = STATE_BOOTING;
 
+// ─── Classroom Lecture Attendance Roster ──────────────────────────
+
+struct AttendeeRecord {
+    char name[32];
+    char studentId[24];
+    char mac[20];
+    char originId[16];
+    char platform[12];
+    unsigned long timestamp;
+    int hopCount;
+};
+
+#define MAX_ATTENDEES 100
+AttendeeRecord lectureRoster[MAX_ATTENDEES];
+int lectureAttendeeCount = 0;
+
 // ─── Forward Declarations ────────────────────────────────────────
 
 bool isPacketIdDuplicate(const char* packetId);
@@ -221,7 +237,9 @@ void cachePacketId(uint32_t packetId);
 void cleanExpiredCache();
 void processAttendancePacket(const uint8_t* data, size_t length, int rssi, BLEAddress addr);
 void processPhase4Packet(const uint8_t* data, size_t length);
-void sendAck(const char* packetId, const char* status);
+void sendAck(const char* packetId, const char* status, int count = 0);
+void printAttendanceRoster();
+void updateGatewayStatusChar();
 void printPacketHex(const uint8_t* data, size_t length);
 void blinkLed(uint8_t r, uint8_t g, uint8_t b, int times, int delayMs);
 void printDiagnostics();
@@ -313,20 +331,24 @@ class GatewayScanCallbacks : public BLEAdvertisedDeviceCallbacks {
 
 // ─── BLE Server Callbacks ────────────────────────────────────────
 
+void updateGatewayStatusChar() {
+    if (pStatusChar != nullptr) {
+        char statusJson[96];
+        snprintf(statusJson, sizeof(statusJson),
+            "{\"clients\":%d,\"attendees\":%d,\"uptime\":%lu}",
+            connectedClients, lectureAttendeeCount, millis() / 1000);
+        pStatusChar->setValue(statusJson);
+        pStatusChar->notify();
+    }
+}
+
 class GatewayServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) override {
         connectedClients++;
         Serial.printf("[BLE] Connected (clients: %d)\n", connectedClients);
         blinkLed(0, 20, 0, 2, 100);
         currentState = STATE_BLE_CONNECTED;
-        // Update status characteristic so phones can read peer count
-        if (pStatusChar != nullptr) {
-            char statusJson[64];
-            snprintf(statusJson, sizeof(statusJson),
-                "{\"clients\":%d,\"uptime\":%lu}", connectedClients, millis()/1000);
-            pStatusChar->setValue(statusJson);
-            pStatusChar->notify();
-        }
+        updateGatewayStatusChar();
         updateTftDisplay();
         // Restart advertising so other devices can discover us
         BLEDevice::startAdvertising();
@@ -337,14 +359,7 @@ class GatewayServerCallbacks : public BLEServerCallbacks {
         if (connectedClients < 0) connectedClients = 0;
         Serial.printf("[BLE] Disconnected (clients: %d)\n", connectedClients);
         currentState = (connectedClients > 0) ? STATE_BLE_CONNECTED : STATE_BLE_READY;
-        // Update status characteristic
-        if (pStatusChar != nullptr) {
-            char statusJson[64];
-            snprintf(statusJson, sizeof(statusJson),
-                "{\"clients\":%d,\"uptime\":%lu}", connectedClients, millis()/1000);
-            pStatusChar->setValue(statusJson);
-            pStatusChar->notify();
-        }
+        updateGatewayStatusChar();
         updateTftDisplay();
         // Restart advertising after disconnect
         BLEDevice::startAdvertising();
@@ -365,22 +380,29 @@ class AttendanceCharCallbacks : public BLECharacteristicCallbacks {
 
         const uint8_t* data = (const uint8_t*)value.c_str();
 
-        // Phase 4: Detect JSON packets (first byte is '{')
-        if (data[0] == 0x7B) {  // '{'
-            Serial.printf("[GATT] Received Phase 4 JSON packet: %d bytes\n", (int)len);
-            processPhase4Packet(data, len);
+        // Skip any leading whitespace if present
+        size_t startIdx = 0;
+        while (startIdx < len && (data[startIdx] == ' ' || data[startIdx] == '\t' || data[startIdx] == '\r' || data[startIdx] == '\n')) {
+            startIdx++;
+        }
+
+        // Phase 4: Detect JSON packets (first non-whitespace byte is '{' / 0x7B)
+        if (startIdx < len && data[startIdx] == 0x7B) {  // '{'
+            Serial.printf("[GATT] Received Phase 4 JSON packet: %d bytes\n", (int)(len - startIdx));
+            processPhase4Packet(data + startIdx, len - startIdx);
             return;
         }
 
         // Phase 1: Binary attendance packet
         if (len < 6) {
-            Serial.printf("[GATT] Received binary write too short: %d bytes\n", (int)len);
+            Serial.printf("[GATT] Received binary write too short: %d bytes (first byte: 0x%02X)\n", (int)len, data[0]);
             return;
         }
 
         // Check magic bytes
         if (data[0] != ATTENDANCE_MAGIC_BYTE_0 || data[1] != ATTENDANCE_MAGIC_BYTE_1) {
-            Serial.println("[GATT] Invalid magic bytes in write");
+            Serial.printf("[GATT] Invalid magic bytes in write: 0x%02X 0x%02X (expected 0x%02X 0x%02X, len=%d)\n",
+                          data[0], data[1], ATTENDANCE_MAGIC_BYTE_0, ATTENDANCE_MAGIC_BYTE_1, (int)len);
             invalidPacketsCount++;
             return;
         }
@@ -411,11 +433,14 @@ void processPhase4Packet(const uint8_t* data, size_t length) {
     jsonBuf[copyLen] = '\0';
 
     // Extract fields
-    char packetType[16] = "";
-    char packetId[16]   = "";
-    char originId[16]   = "";
-    char platform[12]   = "";
-    char payload[64]    = "";
+    char packetType[16]  = "";
+    char packetId[16]    = "";
+    char originId[16]    = "";
+    char platform[12]    = "";
+    char payload[64]     = "";
+    char studentName[32] = "";
+    char studentId[24]   = "";
+    char deviceMac[20]   = "";
 
     int version  = jsonExtractInt(jsonBuf, "v", -1);
     jsonExtractString(jsonBuf, "t", packetType, sizeof(packetType));
@@ -423,6 +448,9 @@ void processPhase4Packet(const uint8_t* data, size_t length) {
     jsonExtractString(jsonBuf, "oid", originId, sizeof(originId));
     jsonExtractString(jsonBuf, "sp", platform, sizeof(platform));
     jsonExtractString(jsonBuf, "p", payload, sizeof(payload));
+    jsonExtractString(jsonBuf, "sname", studentName, sizeof(studentName));
+    jsonExtractString(jsonBuf, "sid", studentId, sizeof(studentId));
+    jsonExtractString(jsonBuf, "mac", deviceMac, sizeof(deviceMac));
     int ttl      = jsonExtractInt(jsonBuf, "ttl", -1);
     int hopCount = jsonExtractInt(jsonBuf, "hc", -1);
 
@@ -430,29 +458,32 @@ void processPhase4Packet(const uint8_t* data, size_t length) {
     if (version != 1) {
         Serial.printf("[RX] Invalid version: %d\n", version);
         invalidPacketsCount++;
-        sendAck(packetId, "INVALID");
+        sendAck(packetId, "INVALID", lectureAttendeeCount);
         return;
     }
 
-    if (strcmp(packetType, "TEST_RELAY") != 0) {
+    bool isAttendance = (strcmp(packetType, "ATTENDANCE") == 0);
+    bool isTestRelay  = (strcmp(packetType, "TEST_RELAY") == 0);
+
+    if (!isAttendance && !isTestRelay) {
         Serial.printf("[RX] Unknown packet type: %s\n", packetType);
         invalidPacketsCount++;
-        sendAck(packetId, "INVALID");
+        sendAck(packetId, "INVALID", lectureAttendeeCount);
         return;
     }
 
     if (strlen(packetId) == 0) {
         Serial.println("[RX] Missing packet ID");
         invalidPacketsCount++;
-        sendAck("", "INVALID");
+        sendAck("", "INVALID", lectureAttendeeCount);
         return;
     }
 
-    // Duplicate check
+    // Duplicate packet check (packet ID level)
     if (isPacketIdDuplicate(packetId)) {
         duplicatePacketsCount++;
         Serial.printf("[RX] DUPLICATE packet: %s (suppressed)\n", packetId);
-        sendAck(packetId, "DUPLICATE");
+        sendAck(packetId, "DUPLICATE", lectureAttendeeCount);
         return;
     }
 
@@ -462,8 +493,52 @@ void processPhase4Packet(const uint8_t* data, size_t length) {
     // TTL check
     if (ttl <= 0) {
         Serial.printf("[RX] TTL expired for packet: %s\n", packetId);
-        sendAck(packetId, "REJECTED");
+        sendAck(packetId, "REJECTED", lectureAttendeeCount);
         return;
+    }
+
+    // Populate defaults for name, ID, and MAC if not explicitly set
+    if (strlen(studentName) == 0 && strlen(payload) > 0) {
+        strncpy(studentName, payload, sizeof(studentName) - 1);
+    } else if (strlen(studentName) == 0) {
+        snprintf(studentName, sizeof(studentName), "Student (%s)", originId);
+    }
+
+    if (strlen(studentId) == 0) {
+        snprintf(studentId, sizeof(studentId), "STU-%s", originId);
+    }
+
+    if (strlen(deviceMac) == 0) {
+        strncpy(deviceMac, originId, sizeof(deviceMac) - 1);
+    }
+
+    // Check if this student is already in the lecture roster (by MAC or Student ID)
+    int existingIdx = -1;
+    for (int i = 0; i < lectureAttendeeCount; i++) {
+        if ((strlen(deviceMac) > 0 && strcmp(lectureRoster[i].mac, deviceMac) == 0) ||
+            (strlen(studentId) > 0 && strcmp(lectureRoster[i].studentId, studentId) == 0)) {
+            existingIdx = i;
+            break;
+        }
+    }
+
+    bool isNewAttendee = (existingIdx == -1);
+    if (isNewAttendee) {
+        if (lectureAttendeeCount < MAX_ATTENDEES) {
+            strncpy(lectureRoster[lectureAttendeeCount].name, studentName, sizeof(lectureRoster[lectureAttendeeCount].name) - 1);
+            strncpy(lectureRoster[lectureAttendeeCount].studentId, studentId, sizeof(lectureRoster[lectureAttendeeCount].studentId) - 1);
+            strncpy(lectureRoster[lectureAttendeeCount].mac, deviceMac, sizeof(lectureRoster[lectureAttendeeCount].mac) - 1);
+            strncpy(lectureRoster[lectureAttendeeCount].originId, originId, sizeof(lectureRoster[lectureAttendeeCount].originId) - 1);
+            strncpy(lectureRoster[lectureAttendeeCount].platform, platform, sizeof(lectureRoster[lectureAttendeeCount].platform) - 1);
+            lectureRoster[lectureAttendeeCount].timestamp = millis() / 1000;
+            lectureRoster[lectureAttendeeCount].hopCount = hopCount;
+            lectureAttendeeCount++;
+        }
+    } else {
+        // Update hop count if shorter path
+        if (hopCount < lectureRoster[existingIdx].hopCount) {
+            lectureRoster[existingIdx].hopCount = hopCount;
+        }
     }
 
     // Valid packet — process it
@@ -474,51 +549,92 @@ void processPhase4Packet(const uint8_t* data, size_t length) {
     // Update last packet info for TFT display
     strncpy(lastOriginId, originId, sizeof(lastOriginId) - 1);
     strncpy(lastPlatform, platform, sizeof(lastPlatform) - 1);
-    strncpy(lastPayload, payload, sizeof(lastPayload) - 1);
+    strncpy(lastPayload, studentName, sizeof(lastPayload) - 1);
     strncpy(lastPacketId, packetId, sizeof(lastPacketId) - 1);
     lastHopCount = hopCount;
     lastTtl = ttl;
 
-    // Log to Serial
+    // Log to Serial with clear student banner
     Serial.println();
-    Serial.println("======================================================");
-    Serial.println("         PHASE 4 — TEST RELAY PACKET RECEIVED");
-    Serial.println("======================================================");
-    Serial.printf("  [RX] TEST_RELAY\n");
-    Serial.printf("  [RX] packetId=%s\n", packetId);
-    Serial.printf("  [RX] origin=%s\n", originId);
-    Serial.printf("  [RX] platform=%s\n", platform);
-    Serial.printf("  [RX] payload=%s\n", payload);
-    Serial.printf("  [RX] hopCount=%d\n", hopCount);
-    Serial.printf("  [RX] ttl=%d\n", ttl);
-    Serial.println("------------------------------------------------------");
+    Serial.println("╔══════════════════════════════════════════════════════════════════════════════════════╗");
+    if (isAttendance) {
+        Serial.printf ("║                    ★ ATTENDANCE RECORDED FOR STUDENT ★                               ║\n");
+    } else {
+        Serial.printf ("║                    PHASE 4 — TEST RELAY PACKET RECEIVED                              ║\n");
+    }
+    Serial.println("╠═════════════════╦════════════════════════════════════════════════════════════════════╣");
+    Serial.printf ("║ Student Name    ║ %-66.66s ║\n", studentName);
+    Serial.printf ("║ Student Roll ID ║ %-66.66s ║\n", studentId);
+    Serial.printf ("║ Device MAC      ║ %-66.66s ║\n", deviceMac);
+    Serial.printf ("║ Origin Device   ║ %-16.16s (platform: %-8.8s)                             ║\n", originId, platform);
+    Serial.printf ("║ Network Path    ║ %-12.12s (hopCount: %d, ttl: %d)                                ║\n",
+                   (hopCount == 0) ? "Direct BLE" : "Mesh Relayed", hopCount, ttl);
+    Serial.printf ("║ Status          ║ %-66.66s ║\n",
+                   isNewAttendee ? "VERIFIED & ADDED TO LECTURE ROSTER" : "CONFIRMED (ALREADY IN ROSTER)");
+    Serial.printf ("║ Total Attendees ║ %2d attendee(s) currently marked present in this lecture           ║\n", lectureAttendeeCount);
+    Serial.println("╚═════════════════╩════════════════════════════════════════════════════════════════════╝");
 
-    // Send ACK
-    sendAck(packetId, "RECEIVED");
+    // Print current full classroom roster
+    printAttendanceRoster();
+
+    // Send ACK back to the client
+    sendAck(packetId, isNewAttendee ? "RECORDED" : "ALREADY_RECORDED", lectureAttendeeCount);
     acksGenerated++;
+
+    // Update status characteristic so other clients receive updated count
+    updateGatewayStatusChar();
 
     currentState = STATE_ACK_SENT;
     updateTftDisplay();
 
-    // Visual feedback — cyan flash for Phase 4 packets
+    // Visual feedback — cyan flash for packets
     blinkLed(0, 15, 20, 3, 80);
 
     // After short delay, return to connected/ready state
-    delay(500);
+    delay(400);
     currentState = (connectedClients > 0) ? STATE_BLE_CONNECTED : STATE_BLE_READY;
     updateTftDisplay();
 }
 
+// ─── Print Attendance Roster Table ───────────────────────────────
+
+void printAttendanceRoster() {
+    Serial.println();
+    Serial.println("═══════════════════════════ LECTURE ATTENDANCE ROSTER ═══════════════════════════════");
+    Serial.printf ("  Session Gateway: %s  |  Total Attendees Present: %d\n", GATEWAY_DEVICE_NAME, lectureAttendeeCount);
+    Serial.println("  +----+------------------------+----------------+-------------------+------+-----------+");
+    Serial.println("  | #  | Student Name           | Student ID     | MAC Address       | Hops | Path      |");
+    Serial.println("  +----+------------------------+----------------+-------------------+------+-----------+");
+
+    if (lectureAttendeeCount == 0) {
+        Serial.println("  |    | (No students marked present yet for this lecture session)                     |");
+    } else {
+        for (int i = 0; i < lectureAttendeeCount; i++) {
+            const char* pathStr = (lectureRoster[i].hopCount == 0) ? "Direct" : "Relayed";
+            Serial.printf("  | %02d | %-22.22s | %-14.14s | %-17.17s | %4d | %-9.9s |\n",
+                          i + 1,
+                          lectureRoster[i].name,
+                          lectureRoster[i].studentId,
+                          lectureRoster[i].mac,
+                          lectureRoster[i].hopCount,
+                          pathStr);
+        }
+    }
+    Serial.println("  +----+------------------------+----------------+-------------------+------+-----------+");
+    Serial.println("  [Tip] Type 'a' + Enter to view roster anytime. Type 'c' + Enter to clear roster.");
+    Serial.println();
+}
+
 // ─── ACK Generation ─────────────────────────────────────────────
 
-void sendAck(const char* packetId, const char* status) {
-    // Build ACK JSON
-    char ackJson[128];
+void sendAck(const char* packetId, const char* status, int count) {
+    // Build ACK JSON with attendee count
+    char ackJson[160];
     snprintf(ackJson, sizeof(ackJson),
-        "{\"v\":1,\"t\":\"ACK\",\"pid\":\"%s\",\"gid\":\"%s\",\"s\":\"%s\"}",
-        packetId, GATEWAY_DEVICE_NAME, status);
+        "{\"v\":1,\"t\":\"ACK\",\"pid\":\"%s\",\"gid\":\"%s\",\"s\":\"%s\",\"count\":%d}",
+        packetId, GATEWAY_DEVICE_NAME, status, count);
 
-    Serial.printf("  [ACK] %s → %s\n", packetId, status);
+    Serial.printf("  [ACK] %s → %s (attendees: %d)\n", packetId, status, count);
 
     // Send via NOTIFY if clients are subscribed
     if (pAckChar != nullptr && connectedClients > 0) {
@@ -1099,6 +1215,16 @@ void loop() {
     if (Serial.available()) {
         char cmd = Serial.read();
         switch (cmd) {
+            case 'a':
+            case 'A':
+                printAttendanceRoster();
+                break;
+            case 'c':
+            case 'C':
+                lectureAttendeeCount = 0;
+                Serial.println("[CMD] Lecture attendance roster cleared for next session.");
+                updateGatewayStatusChar();
+                break;
             case 'd':
             case 'D':
                 printDiagnostics();
@@ -1140,6 +1266,8 @@ void loop() {
             case '?':
                 Serial.println();
                 Serial.println("--- Gateway Commands ---");
+                Serial.println("  a — Print lecture attendance roster (students & MACs)");
+                Serial.println("  c — Clear lecture attendance roster for next session");
                 Serial.println("  d — Print diagnostics");
                 Serial.println("  u — Toggle unnamed devices in scan output");
                 Serial.println("  r — Reset counters");
