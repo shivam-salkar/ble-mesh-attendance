@@ -59,6 +59,57 @@ void main() {
       expect(ack.packetId, equals('A1B2C3D4'));
       expect(ack.gatewayId, equals('BMA-Gateway-01'));
     });
+
+    test('parses ACK packet with online sync status', () {
+      final json = {
+        'v': 1,
+        't': 'ACK',
+        'pid': 'PKT-9988',
+        'gid': 'ESP32_GATEWAY_405',
+        's': 'VERIFIED_ONLINE',
+        'count': 15,
+        'sync': true,
+      };
+
+      final ack = AckPacket.fromJson(json);
+      expect(ack.isReceived, isTrue);
+      expect(ack.syncedOnline, isTrue);
+      expect(ack.status, equals('VERIFIED_ONLINE'));
+      expect(ack.attendeeCount, equals(15));
+    });
+
+    test('RelayPacket serializes and deserializes session tokens and nonces', () {
+      final packet = RelayPacket(
+        type: RelayPacket.typeAttendance,
+        originId: 'DEV-99',
+        sourcePlatform: 'android',
+        payload: 'Aryan Darekar (25102C0040)',
+        studentName: 'Aryan Darekar',
+        studentId: '25102C0040',
+        deviceMac: 'AA:BB:CC:DD:EE:FF',
+        sessionId: 'sess-1234-abcd',
+        sessionNonce: 'nonce-8899',
+        ttl: 4,
+      );
+
+      final jsonStr = packet.toJsonString();
+      expect(jsonStr, contains('"sess":"sess-1234-abcd"'));
+      expect(jsonStr, contains('"nonce":"nonce-8899"'));
+
+      final decoded = jsonDecode(jsonStr) as Map<String, dynamic>;
+      final parsed = RelayPacket.fromJson(decoded);
+
+      expect(parsed.sessionId, equals('sess-1234-abcd'));
+      expect(parsed.sessionNonce, equals('nonce-8899'));
+      expect(parsed.studentName, equals('Aryan Darekar'));
+      expect(parsed.deviceMac, equals('AA:BB:CC:DD:EE:FF'));
+
+      final forwarded = parsed.forwarded();
+      expect(forwarded.sessionId, equals('sess-1234-abcd'));
+      expect(forwarded.sessionNonce, equals('nonce-8899'));
+      expect(forwarded.ttl, equals(3));
+      expect(forwarded.hopCount, equals(1));
+    });
   });
 
   group('RelayEngine', () {

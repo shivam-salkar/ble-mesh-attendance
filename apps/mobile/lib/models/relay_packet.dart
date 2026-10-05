@@ -22,6 +22,8 @@ class RelayPacket {
   final String studentName;
   final String studentId;
   final String deviceMac;
+  final String? sessionId;
+  final String? sessionNonce;
   int ttl;
   int hopCount;
 
@@ -35,6 +37,8 @@ class RelayPacket {
     this.studentName = '',
     this.studentId = '',
     this.deviceMac = '',
+    this.sessionId,
+    this.sessionNonce,
     this.ttl = 3,
     this.hopCount = 0,
   }) : packetId = packetId ?? _generatePacketId();
@@ -57,6 +61,8 @@ class RelayPacket {
       studentName: json['sname'] as String? ?? '',
       studentId: json['sid'] as String? ?? '',
       deviceMac: json['mac'] as String? ?? '',
+      sessionId: json['sess'] as String? ?? (json['sessionId'] as String?),
+      sessionNonce: json['nonce'] as String? ?? (json['sessionNonce'] as String?),
       ttl: json['ttl'] as int? ?? 0,
       hopCount: json['hc'] as int? ?? 0,
     );
@@ -73,6 +79,8 @@ class RelayPacket {
       'sname': studentName,
       'sid': studentId,
       'mac': deviceMac,
+      if (sessionId != null && sessionId!.isNotEmpty) 'sess': sessionId,
+      if (sessionNonce != null && sessionNonce!.isNotEmpty) 'nonce': sessionNonce,
       'p': payload,
       'ttl': ttl,
       'hc': hopCount,
@@ -81,8 +89,26 @@ class RelayPacket {
 
   /// Serialize to compact JSON string for GATT write.
   String toJsonString() {
-    return '{"v":$version,"t":"$type","pid":"$packetId","oid":"$originId","sp":"$sourcePlatform",'
-        '"sname":"$studentName","sid":"$studentId","mac":"$deviceMac","p":"$payload","ttl":$ttl,"hc":$hopCount}';
+    final buffer = StringBuffer('{')
+      ..write('"v":$version,')
+      ..write('"t":"$type",')
+      ..write('"pid":"$packetId",')
+      ..write('"oid":"$originId",')
+      ..write('"sp":"$sourcePlatform",')
+      ..write('"sname":"$studentName",')
+      ..write('"sid":"$studentId",')
+      ..write('"mac":"$deviceMac",');
+    if (sessionId != null && sessionId!.isNotEmpty) {
+      buffer.write('"sess":"$sessionId",');
+    }
+    if (sessionNonce != null && sessionNonce!.isNotEmpty) {
+      buffer.write('"nonce":"$sessionNonce",');
+    }
+    buffer
+      ..write('"p":"$payload",')
+      ..write('"ttl":$ttl,')
+      ..write('"hc":$hopCount}');
+    return buffer.toString();
   }
 
   /// Create a forwarded copy (increment hop, decrement TTL).
@@ -97,6 +123,8 @@ class RelayPacket {
       studentName: studentName,
       studentId: studentId,
       deviceMac: deviceMac,
+      sessionId: sessionId,
+      sessionNonce: sessionNonce,
       ttl: ttl - 1,
       hopCount: hopCount + 1,
     );
@@ -122,6 +150,7 @@ class AckPacket {
   final String gatewayId;
   final String status;
   final int attendeeCount;
+  final bool syncedOnline;
 
   const AckPacket({
     required this.version,
@@ -130,6 +159,7 @@ class AckPacket {
     required this.gatewayId,
     required this.status,
     this.attendeeCount = 0,
+    this.syncedOnline = false,
   });
 
   factory AckPacket.fromJson(Map<String, dynamic> json) {
@@ -140,12 +170,19 @@ class AckPacket {
       gatewayId: json['gid'] as String? ?? '',
       status: json['s'] as String? ?? '',
       attendeeCount: json['count'] as int? ?? 0,
+      syncedOnline: json['sync'] == true || json['sync'] == 'true',
     );
   }
 
-  bool get isReceived => status == 'RECEIVED' || status == 'RECORDED';
+  bool get isReceived =>
+      status == 'RECEIVED' ||
+      status == 'RECORDED' ||
+      status == 'VERIFIED_ONLINE' ||
+      status == 'OFFLINE_RECORDED';
+
   bool get isDuplicate => status == 'DUPLICATE' || status == 'ALREADY_RECORDED';
 
   @override
-  String toString() => 'ACK($packetId → $status from $gatewayId, count=$attendeeCount)';
+  String toString() =>
+      'ACK($packetId → $status from $gatewayId, count=$attendeeCount, synced=$syncedOnline)';
 }
