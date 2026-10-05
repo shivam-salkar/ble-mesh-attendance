@@ -88,8 +88,8 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RS
 
 const char* WIFI_SSID       = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD   = "YOUR_WIFI_PASSWORD";
-const char* SUPABASE_URL    = "https://your-project.supabase.co";
-const char* SUPABASE_KEY    = "your-anon-or-service-role-key";
+const char* SUPABASE_URL    = "https://hiqmayrqlqgvxqsaxdkm.supabase.co";
+const char* SUPABASE_KEY    = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhpcW1heXJxbHFndnhxc2F4ZGttIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEyMTM2OTMsImV4cCI6MjEwNjc4OTY5M30.bq3IEkjLRbCStJybuyGv9KMVbtvUY3tglOlIXyWyumw";
 const char* GATEWAY_DB_ID   = "ESP32_GATEWAY_405";
 #endif
 

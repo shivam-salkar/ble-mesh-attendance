@@ -4,12 +4,13 @@ class SupabaseConfig {
   // Configurable via --dart-define=SUPABASE_URL=... or overridden at runtime
   static const String supabaseUrl = String.fromEnvironment(
     'SUPABASE_URL',
-    defaultValue: 'https://vgoalbrdqftymknwtmqg.supabase.co',
+    defaultValue: 'https://hiqmayrqlqgvxqsaxdkm.supabase.co',
   );
 
   static const String supabaseAnonKey = String.fromEnvironment(
     'SUPABASE_ANON_KEY',
-    defaultValue: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.fake-anon-key',
+    defaultValue:
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhpcW1heXJxbHFndnhxc2F4ZGttIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEyMTM2OTMsImV4cCI6MjEwNjc4OTY5M30.bq3IEkjLRbCStJybuyGv9KMVbtvUY3tglOlIXyWyumw',
   );
 
   static bool _isInitialized = false;
