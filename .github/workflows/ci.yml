@@ -22,7 +22,7 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        run: flutter pub get || flutter pub upgrade
+        run: flutter pub get
         working-directory: apps/mobile
 
       - name: Analyze code
@@ -93,6 +93,21 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
         working-directory: apps/mobile
+
+      - name: Patch flutter_ble_peripheral Swift syntax
+        run: |
+          python3 -c '
+          import glob, os
+          pattern = os.path.expanduser("~/.pub-cache/**/FlutterBlePeripheralPlugin.swift")
+          for path in glob.glob(pattern, recursive=True):
+              with open(path, "r") as f:
+                  content = f.read()
+              fixed = content.replace("uuids: map?[\"serviceUuids\"] as? [String] ,", "uuids: map?[\"serviceUuids\"] as? [String]")
+              if fixed != content:
+                  with open(path, "w") as f:
+                      f.write(fixed)
+                  print(f"Successfully patched trailing comma in {path}")
+          '
 
       - name: Build iOS Application
         run: flutter build ios --release --no-codesign
