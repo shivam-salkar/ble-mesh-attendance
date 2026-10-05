@@ -1,4 +1,4 @@
-name: Build and Release Android APK
+name: Build and Release Mobile Apps
 
 on:
   push:
@@ -22,9 +22,13 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    name: Build Android APK and Publish Release
+  build-android:
+    name: Build Android APK
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.artifacts.outputs.tag }}
+      apk_file: ${{ steps.artifacts.outputs.apk_file }}
+      sha256: ${{ steps.artifacts.outputs.sha256 }}
 
     steps:
       - name: Checkout Repository
@@ -49,7 +53,7 @@ jobs:
           cache: true
 
       - name: Install Dependencies
-        run: flutter pub get || flutter pub upgrade
+        run: flutter pub get
         working-directory: apps/mobile
 
       - name: Run Code Analysis
@@ -64,7 +68,7 @@ jobs:
         run: flutter build apk --release
         working-directory: apps/mobile
 
-      - name: Prepare Release Artifacts and Checksum
+      - name: Prepare Android Artifact and Checksum
         id: artifacts
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag_name }}" ]; then
@@ -81,60 +85,193 @@ jobs:
           cp "$APK_SOURCE" "$APK_TARGET"
           
           SHA256=$(sha256sum "$APK_TARGET" | awk '{print $1}')
-          echo "$SHA256  $APK_TARGET" > checksums.txt
+          echo "$SHA256  $APK_TARGET" > checksum_android.txt
           
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "apk_file=$APK_TARGET" >> $GITHUB_OUTPUT
           echo "sha256=$SHA256" >> $GITHUB_OUTPUT
 
+      - name: Upload Android Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-android-apk
+          path: |
+            ${{ steps.artifacts.outputs.apk_file }}
+            checksum_android.txt
+          retention-days: 14
+
+  build-ios:
+    name: Build iOS IPA
+    runs-on: macos-14
+    outputs:
+      tag: ${{ steps.artifacts.outputs.tag }}
+      ipa_file: ${{ steps.artifacts.outputs.ipa_file }}
+      zip_file: ${{ steps.artifacts.outputs.zip_file }}
+      sha256: ${{ steps.artifacts.outputs.sha256 }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install CocoaPods
+        run: |
+          pod --version || brew install cocoapods
+
+      - name: Install Dependencies
+        run: flutter pub get
+        working-directory: apps/mobile
+
+      - name: Patch flutter_ble_peripheral Swift syntax
+        run: |
+          python3 -c '
+          import glob, os
+          pattern = os.path.expanduser("~/.pub-cache/**/FlutterBlePeripheralPlugin.swift")
+          for path in glob.glob(pattern, recursive=True):
+              with open(path, "r") as f:
+                  content = f.read()
+              fixed = content.replace("uuids: map?[\"serviceUuids\"] as? [String] ,", "uuids: map?[\"serviceUuids\"] as? [String]")
+              if fixed != content:
+                  with open(path, "w") as f:
+                      f.write(fixed)
+                  print(f"Successfully patched trailing comma in {path}")
+          '
+
+      - name: Build iOS Application
+        run: flutter build ios --release --no-codesign
+        working-directory: apps/mobile
+
+      - name: Package iOS IPA and App Bundle
+        id: artifacts
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v0.4.0-phase4"
+          fi
+
+          IPA_TARGET="ble-mesh-attendance-${TAG}.ipa"
+          ZIP_TARGET="ble-mesh-attendance-${TAG}-ios-app.zip"
+
+          cd apps/mobile/build/ios/iphoneos
+          mkdir -p Payload
+          cp -r Runner.app Payload/
+          zip -r -y "../../../../${IPA_TARGET}" Payload
+          zip -r -y "../../../../${ZIP_TARGET}" Runner.app
+          cd ../../../..
+
+          SHA256=$(shasum -a 256 "$IPA_TARGET" | awk '{print $1}')
+          echo "$SHA256  $IPA_TARGET" > checksum_ios.txt
+
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "ipa_file=$IPA_TARGET" >> $GITHUB_OUTPUT
+          echo "zip_file=$ZIP_TARGET" >> $GITHUB_OUTPUT
+          echo "sha256=$SHA256" >> $GITHUB_OUTPUT
+
+      - name: Upload iOS Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-ios-ipa
+          path: |
+            ${{ steps.artifacts.outputs.ipa_file }}
+            ${{ steps.artifacts.outputs.zip_file }}
+            checksum_ios.txt
+          retention-days: 14
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build-android, build-ios]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download Android Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-android-apk
+
+      - name: Download iOS Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-ios-ipa
+
+      - name: Aggregate Checksums
+        id: checksums
+        run: |
+          cat checksum_android.txt checksum_ios.txt > checksums.txt
+          cat checksums.txt
+
       - name: Generate Release Notes
         id: notes
         env:
-          TAG: ${{ steps.artifacts.outputs.tag }}
-          APK_TARGET: ${{ steps.artifacts.outputs.apk_file }}
-          SHA256: ${{ steps.artifacts.outputs.sha256 }}
+          TAG: ${{ needs.build-android.outputs.tag }}
+          APK_TARGET: ${{ needs.build-android.outputs.apk_file }}
+          APK_SHA: ${{ needs.build-android.outputs.sha256 }}
+          IPA_TARGET: ${{ needs.build-ios.outputs.ipa_file }}
+          IPA_SHA: ${{ needs.build-ios.outputs.sha256 }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
           python3 -c "
           import os, datetime
           tag = os.environ['TAG']
           apk = os.environ['APK_TARGET']
-          sha256 = os.environ['SHA256']
+          apk_sha = os.environ['APK_SHA']
+          ipa = os.environ['IPA_TARGET']
+          ipa_sha = os.environ['IPA_SHA']
           commit = os.environ['COMMIT_SHA']
           build_date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
           
-          content = f'''# BLE Mesh Attendance - Mobile Application Release
+          content = f'''# BLE Mesh Attendance - Mobile Application Release ({tag})
 
           ## Build Information
           - Release Tag: {tag}
           - Commit SHA: {commit}
           - Build Timestamp: {build_date}
-          - Framework: Flutter 3.27.x / Dart 3.5+
-          - Supported Android Platforms: Android 8.0 (API level 26) through Android 14 (API level 34)
+          - Framework: Flutter 3.27+ / Dart 3.5+
+          - Supported Android: Android 8.0 (API 26) through Android 14 (API 34)
+          - Supported iOS: iOS 13.0 through iOS 18.x
 
           ## Overview
-          This release package contains the compiled Android client application for the BLE Mesh Attendance system. The build includes Phase 4 cross-platform interoperability features including multi-role BLE communications, local packet relay forwarding, and direct communication with the ESP32-S3 classroom gateway.
+          This release contains the compiled **Android APK** and **iOS IPA** client applications for the BLE Mesh Attendance system. The build includes Phase 4 student profile binding, student-friendly UI, classroom gateway roster support, and multi-role BLE mesh forwarding.
 
-          ## Key Capabilities
-          - Diagnostic and Interoperability Test Screen (BleTestScreen)
-          - Dual-role BLE Central and Peripheral subsystem
-          - Application-level packet relay engine with bounded in-memory deduplication cache (128 entries, 5-minute expiration)
-          - Time-to-Live (TTL) enforcement and hop count tracking
-          - Ephemeral application-scoped device identifiers (PLATFORM-XXXX) preserving user privacy without hardware MAC exposure
-          - Compatibility with ESP32-S3 Gateway Firmware (Phase 1 binary protocol and Phase 4 JSON test protocol)
-          - Real-time telemetry event log for protocol debugging and transaction tracing
+          ## Key Features Included
+          - **Student Profile Binding:** Persistent storage for student Full Name, Roll ID, and IEEE 802 formatted MAC address (XX:XX:XX:XX:XX:XX).
+          - **Student-Friendly UI:** One-tap 'MARK MY ATTENDANCE' button with live confirmation timestamps, gateway status card, and live 'Lecture Attendees' roster.
+          - **ESP32 Gateway Roster Support:** Full compatibility with ESP32-S3 gateway firmware supporting deduplication and serial attendance reports.
+          - **Dual-role BLE Mesh:** Application-level packet relay engine with bounded in-memory cache and TTL hop enforcement.
 
-          ## Artifact Verification
-          Artifact integrity and provenance can be verified against the following SHA-256 hash:
+          ## Release Packages & Checksums
           \`\`\`
-          {sha256}  {apk}
+          {apk_sha}  {apk}
+          {ipa_sha}  {ipa}
           \`\`\`
 
           ## Installation Instructions
-          1. Download \`{apk}\` to your Android mobile device.
-          2. In Android system settings, allow installation from unknown sources for your browser or file manager if prompted.
-          3. Open the downloaded package to complete installation.
-          4. When launching the application for the first time, approve the requested Bluetooth and Nearby Devices permissions.
+
+          ### Android (.apk)
+          1. Download \`{apk}\` to your Android device.
+          2. Allow installation from unknown sources if prompted.
+          3. Open the downloaded package to install.
+          4. Grant Bluetooth and Nearby Devices permissions when prompted.
+
+          ### iOS (.ipa)
+          1. Download \`{ipa}\` to your computer or iOS device.
+          2. Install using your preferred sideloading tool:
+             - **AltStore** / **SideStore**: Open \`{ipa}\` in the AltStore app to sign and install with your free Apple ID.
+             - **Sideloadly**: Drag and drop \`{ipa}\` to install directly over USB or Wi-Fi.
+             - **Xcode / Apple Configurator**: Install via Devices and Simulators window.
+          3. Grant Bluetooth permissions on first launch.
           '''
 
           with open('release_notes.md', 'w', encoding='utf-8') as f:
@@ -144,11 +281,13 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.artifacts.outputs.tag }}
-          name: BLE Mesh Attendance Mobile - ${{ steps.artifacts.outputs.tag }}
+          tag_name: ${{ needs.build-android.outputs.tag }}
+          name: BLE Mesh Attendance Mobile - ${{ needs.build-android.outputs.tag }}
           body_path: release_notes.md
           draft: false
           prerelease: ${{ inputs.prerelease || false }}
           files: |
-            ${{ steps.artifacts.outputs.apk_file }}
+            ${{ needs.build-android.outputs.apk_file }}
+            ${{ needs.build-ios.outputs.ipa_file }}
+            ${{ needs.build-ios.outputs.zip_file }}
             checksums.txt
