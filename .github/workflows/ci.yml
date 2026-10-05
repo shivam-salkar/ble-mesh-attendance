@@ -22,7 +22,7 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        run: flutter pub get || flutter pub upgrade
+        run: flutter pub get
         working-directory: apps/mobile
 
       - name: Analyze code
