@@ -349,6 +349,83 @@ class AttendanceService extends ChangeNotifier {
     }
   }
 
+  /// Records attendance verified by BLE Gateway or Bluetooth Mesh.
+  Future<AttendanceRecord> submitVerifiedAttendance({
+    required String sessionId,
+    required String studentId,
+    required String studentName,
+    required String rollNumber,
+    required String macAddress,
+    String verificationMethod = 'BLE_GATEWAY',
+    bool gatewayVerified = true,
+    int hopCount = 0,
+    int? bleRssi,
+    String? gatewayId,
+  }) async {
+    final now = DateTime.now();
+    final record = AttendanceRecord(
+      id: 'rec-${now.millisecondsSinceEpoch}',
+      sessionId: sessionId,
+      studentId: studentId,
+      studentName: studentName,
+      rollNumber: rollNumber,
+      macAddress: macAddress,
+      deviceId: gatewayId ?? 'ESP32_GATEWAY_405',
+      timestamp: now,
+      verifiedAt: now,
+      status: 'PRESENT',
+      isConfirmed: true,
+      isSelf: true,
+      gatewayVerified: gatewayVerified,
+      verificationMethod: verificationMethod,
+      hopCount: hopCount,
+    );
+
+    if (!SupabaseConfig.isInitialized) {
+      if (!_sessionRecords.any((r) => r.studentId == studentId)) {
+        _sessionRecords.insert(0, record);
+        notifyListeners();
+      }
+      return record;
+    }
+
+    try {
+      final insertData = {
+        'session_id': sessionId,
+        'student_id': studentId,
+        'status': 'PRESENT',
+        'submitted_at': now.toIso8601String(),
+        'verified_at': now.toIso8601String(),
+        'verification_method': verificationMethod,
+        'gateway_verified': gatewayVerified,
+        'gateway_id': gatewayId ?? 'ESP32_GATEWAY_405',
+        'mac_address': macAddress,
+        'hop_count': hopCount,
+        if (bleRssi != null) 'ble_rssi': bleRssi,
+      };
+
+      final res = await SupabaseConfig.client
+          .from('attendance_records')
+          .insert(insertData)
+          .select('*, profiles(name, roll_number)')
+          .single();
+
+      final saved = AttendanceRecord.fromJson(res);
+      if (!_sessionRecords.any((r) => r.studentId == studentId)) {
+        _sessionRecords.insert(0, saved);
+        notifyListeners();
+      }
+      return saved;
+    } catch (e) {
+      debugPrint('[AttendanceService] submitVerifiedAttendance error: $e');
+      if (!_sessionRecords.any((r) => r.studentId == studentId)) {
+        _sessionRecords.insert(0, record);
+        notifyListeners();
+      }
+      return record;
+    }
+  }
+
   /// Fetch past attendance history for a student.
   Future<List<AttendanceRecord>> fetchStudentHistory(String studentId) async {
     if (!SupabaseConfig.isInitialized) {

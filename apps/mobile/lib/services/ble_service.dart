@@ -444,7 +444,13 @@ class BleService extends ChangeNotifier {
   // ─── Student Attendance Submission ─────────────────────────────
 
   /// Submits student attendance to the connected Gateway or mesh peer.
-  Future<bool> markAttendance() async {
+  Future<bool> markAttendance({
+    String? sessionId,
+    String? sessionNonce,
+    String? studentName,
+    String? studentId,
+    String? deviceMac,
+  }) async {
     // If not connected, try auto-connecting
     if (!_isConnected || _connectedDevice == null) {
       _addEvent(BleEventType.info, 'Not connected. Searching for classroom gateway...');
@@ -456,13 +462,19 @@ class BleService extends ChangeNotifier {
       }
     }
 
-    final name = _profile?.name.trim().isNotEmpty == true
-        ? _profile!.name.trim()
-        : 'Student (${_deviceId.split('-').last})';
-    final sid = _profile?.studentId.trim().isNotEmpty == true
-        ? _profile!.studentId.trim()
-        : 'STU-${_deviceId.split('-').last}';
-    final mac = _profile?.macAddress ?? '';
+    final name = (studentName != null && studentName.trim().isNotEmpty)
+        ? studentName.trim()
+        : (_profile?.name.trim().isNotEmpty == true
+            ? _profile!.name.trim()
+            : 'Student (${_deviceId.split('-').last})');
+    final sid = (studentId != null && studentId.trim().isNotEmpty)
+        ? studentId.trim()
+        : (_profile?.studentId.trim().isNotEmpty == true
+            ? _profile!.studentId.trim()
+            : 'STU-${_deviceId.split('-').last}');
+    final mac = (deviceMac != null && deviceMac.trim().isNotEmpty)
+        ? deviceMac.trim()
+        : (_profile?.macAddress ?? '');
 
     _isSubmittingAttendance = true;
     notifyListeners();
@@ -474,6 +486,8 @@ class BleService extends ChangeNotifier {
       studentName: name,
       studentId: sid,
       deviceMac: mac,
+      sessionId: sessionId,
+      sessionNonce: sessionNonce,
       payload: '$name ($sid)',
       ttl: 3,
       hopCount: 0,

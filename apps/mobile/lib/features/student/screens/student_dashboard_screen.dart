@@ -6,6 +6,7 @@ import '../../../services/student_profile_service.dart';
 import '../../../models/attendance_session.dart';
 import '../../../models/attendance_record.dart';
 import '../../../screens/ble_test_screen.dart';
+import '../../../services/ble_service.dart';
 import '../../auth/screens/login_screen.dart';
 
 class StudentDashboardScreen extends StatefulWidget {
@@ -18,11 +19,13 @@ class StudentDashboardScreen extends StatefulWidget {
 class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   final _authService = AuthService();
   final _attendanceService = AttendanceService();
+  final _bleService = BleService();
 
   StudentProfile? _studentProfile;
   AttendanceSession? _activeSession;
   AttendanceRecord? _markedRecord;
   bool _isSubmitting = false;
+  String _submissionStatus = '';
   Timer? _countdownTimer;
   List<AttendanceRecord> _history = [];
 
@@ -77,16 +80,52 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   Future<void> _markAttendance() async {
     if (_activeSession == null || !_activeSession!.isActive || _isSubmitting) return;
 
-    setState(() => _isSubmitting = true);
+    setState(() {
+      _isSubmitting = true;
+      _submissionStatus = 'Scanning for ESP32 Gateway...';
+    });
     final user = _authService.currentProfile;
+    final studentName = user?.name ?? (_studentProfile?.name ?? 'Aryan Darekar');
+    final rollNumber = user?.rollNumber ?? (_studentProfile?.studentId ?? '25102C0040');
+    final macAddress = _studentProfile?.macAddress ?? '';
 
     try {
-      final record = await _attendanceService.submitDevelopmentAttendance(
-        sessionId: _activeSession!.id,
-        studentId: user?.id ?? '55555555-5555-5555-5555-555555555501',
-        studentName: user?.name ?? (_studentProfile?.name ?? 'Aryan Darekar'),
-        rollNumber: user?.rollNumber ?? (_studentProfile?.studentId ?? '25102C0040'),
-      );
+      bool bleSuccess = false;
+      try {
+        await _bleService.initialize();
+        if (mounted) setState(() => _submissionStatus = 'Connecting to Gateway...');
+        bleSuccess = await _bleService.markAttendance(
+          sessionId: _activeSession!.id,
+          sessionNonce: _activeSession!.sessionNonce,
+          studentName: studentName,
+          studentId: rollNumber,
+          deviceMac: macAddress,
+        ).timeout(const Duration(seconds: 4), onTimeout: () => false);
+      } catch (bleError) {
+        debugPrint('[StudentDashboard] BLE verification fallback: $bleError');
+        bleSuccess = false;
+      }
+
+      AttendanceRecord record;
+      if (bleSuccess) {
+        record = await _attendanceService.submitVerifiedAttendance(
+          sessionId: _activeSession!.id,
+          studentId: user?.id ?? '55555555-5555-5555-5555-555555555501',
+          studentName: studentName,
+          rollNumber: rollNumber,
+          macAddress: macAddress,
+          verificationMethod: 'BLE_GATEWAY',
+          gatewayVerified: true,
+        );
+      } else {
+        // Fallback for emulator / lab development without hardware nearby
+        record = await _attendanceService.submitDevelopmentAttendance(
+          sessionId: _activeSession!.id,
+          studentId: user?.id ?? '55555555-5555-5555-5555-555555555501',
+          studentName: studentName,
+          rollNumber: rollNumber,
+        );
+      }
 
       if (mounted) {
         setState(() {
@@ -94,7 +133,11 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('✓ Attendance Verified for ${_activeSession!.subjectCode ?? "Session"}!'),
+            content: Text(
+              bleSuccess
+                  ? '✓ Verified via Classroom Gateway for ${_activeSession!.subjectCode ?? "Session"}!'
+                  : '✓ Attendance Recorded for ${_activeSession!.subjectCode ?? "Session"} (Direct Fallback)',
+            ),
             backgroundColor: Colors.green,
           ),
         );
@@ -107,7 +150,12 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
         );
       }
     } finally {
-      if (mounted) setState(() => _isSubmitting = false);
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+          _submissionStatus = '';
+        });
+      }
     }
   }
 
@@ -376,8 +424,10 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                       )
                     : const Icon(Icons.touch_app, size: 22),
                 label: Text(
-                  _isSubmitting ? 'VERIFYING...' : 'MARK MY ATTENDANCE',
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                  _isSubmitting
+                      ? (_submissionStatus.isNotEmpty ? _submissionStatus : 'VERIFYING...')
+                      : 'MARK MY ATTENDANCE',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
                 ),
               ),
             ),

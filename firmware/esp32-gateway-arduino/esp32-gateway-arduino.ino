@@ -78,6 +78,21 @@
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
 #endif
 
+// ─── Wi-Fi & Supabase Realtime Gateway Sync (Step 2) ─────────────
+// Set to 1 to enable Wi-Fi sync with Supabase backend; 0 for offline BLE-only mode
+#define WIFI_ENABLED 0
+
+#if WIFI_ENABLED
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+const char* WIFI_SSID       = "YOUR_WIFI_SSID";
+const char* WIFI_PASSWORD   = "YOUR_WIFI_PASSWORD";
+const char* SUPABASE_URL    = "https://your-project.supabase.co";
+const char* SUPABASE_KEY    = "your-anon-or-service-role-key";
+const char* GATEWAY_DB_ID   = "ESP32_GATEWAY_405";
+#endif
+
 // ─── Configuration ───────────────────────────────────────────────
 
 // Custom 128-bit service UUID for the BLE Mesh Attendance Gateway
@@ -237,7 +252,8 @@ void cachePacketId(uint32_t packetId);
 void cleanExpiredCache();
 void processAttendancePacket(const uint8_t* data, size_t length, int rssi, BLEAddress addr);
 void processPhase4Packet(const uint8_t* data, size_t length);
-void sendAck(const char* packetId, const char* status, int count = 0);
+void sendAck(const char* packetId, const char* status, int count = 0, bool syncedOnline = false);
+bool syncAttendanceWithSupabase(const char* sessionId, const char* studentId, const char* studentName, const char* mac, int hopCount);
 void printAttendanceRoster();
 void updateGatewayStatusChar();
 void printPacketHex(const uint8_t* data, size_t length);
@@ -417,6 +433,58 @@ class AttendanceCharCallbacks : public BLECharacteristicCallbacks {
     }
 };
 
+// ─── Supabase Gateway Sync Implementation ──────────────────────────
+
+bool syncAttendanceWithSupabase(const char* sessionId, const char* studentId, const char* studentName, const char* mac, int hopCount) {
+#if WIFI_ENABLED
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("  [WiFi] Offline. Attendance cached locally in gateway roster.");
+        return false;
+    }
+
+    if (strlen(sessionId) == 0 || strlen(studentId) == 0) {
+        Serial.println("  [Supabase] Skip sync: missing sessionId or studentId");
+        return false;
+    }
+
+    HTTPClient http;
+    char endpoint[256];
+    snprintf(endpoint, sizeof(endpoint), "%s/rest/v1/attendance_records", SUPABASE_URL);
+
+    http.begin(endpoint);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("apikey", SUPABASE_KEY);
+    http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
+    http.addHeader("Prefer", "return=minimal");
+
+    char postBody[384];
+    snprintf(postBody, sizeof(postBody),
+        "{\"session_id\":\"%s\",\"student_id\":\"%s\",\"status\":\"PRESENT\","
+        "\"gateway_id\":\"%s\",\"verification_method\":\"BLE_GATEWAY\","
+        "\"gateway_verified\":true,\"mac_address\":\"%s\",\"hop_count\":%d}",
+        sessionId, studentId, GATEWAY_DB_ID, mac, hopCount);
+
+    int httpCode = http.POST(postBody);
+    bool success = (httpCode >= 200 && httpCode < 300);
+
+    if (success) {
+        Serial.printf("  [Supabase] Synced online! (HTTP %d)\n", httpCode);
+    } else {
+        Serial.printf("  [Supabase] Sync returned HTTP %d: %s\n", httpCode, http.getString().c_str());
+    }
+
+    http.end();
+    return success;
+#else
+    (void)sessionId;
+    (void)studentId;
+    (void)studentName;
+    (void)mac;
+    (void)hopCount;
+    return false;
+#endif
+}
+
 // ─── Phase 4 JSON Packet Processing ─────────────────────────────
 
 void processPhase4Packet(const uint8_t* data, size_t length) {
@@ -426,21 +494,23 @@ void processPhase4Packet(const uint8_t* data, size_t length) {
     currentState = STATE_RECEIVING;
     updateTftDisplay();
 
-    // Null-terminate the JSON string for parsing
-    char jsonBuf[256];
+    // Null-terminate the JSON string for parsing (512 bytes buffer for session and nonce)
+    char jsonBuf[512];
     size_t copyLen = (length < sizeof(jsonBuf) - 1) ? length : sizeof(jsonBuf) - 1;
     memcpy(jsonBuf, data, copyLen);
     jsonBuf[copyLen] = '\0';
 
     // Extract fields
-    char packetType[16]  = "";
-    char packetId[16]    = "";
-    char originId[16]    = "";
-    char platform[12]    = "";
-    char payload[64]     = "";
-    char studentName[32] = "";
-    char studentId[24]   = "";
-    char deviceMac[20]   = "";
+    char packetType[16]   = "";
+    char packetId[16]     = "";
+    char originId[16]     = "";
+    char platform[12]     = "";
+    char payload[64]      = "";
+    char studentName[32]  = "";
+    char studentId[40]    = "";
+    char deviceMac[20]    = "";
+    char sessionId[40]    = "";
+    char sessionNonce[40] = "";
 
     int version  = jsonExtractInt(jsonBuf, "v", -1);
     jsonExtractString(jsonBuf, "t", packetType, sizeof(packetType));
@@ -451,6 +521,8 @@ void processPhase4Packet(const uint8_t* data, size_t length) {
     jsonExtractString(jsonBuf, "sname", studentName, sizeof(studentName));
     jsonExtractString(jsonBuf, "sid", studentId, sizeof(studentId));
     jsonExtractString(jsonBuf, "mac", deviceMac, sizeof(deviceMac));
+    jsonExtractString(jsonBuf, "sess", sessionId, sizeof(sessionId));
+    jsonExtractString(jsonBuf, "nonce", sessionNonce, sizeof(sessionNonce));
     int ttl      = jsonExtractInt(jsonBuf, "ttl", -1);
     int hopCount = jsonExtractInt(jsonBuf, "hc", -1);
 
@@ -577,8 +649,17 @@ void processPhase4Packet(const uint8_t* data, size_t length) {
     // Print current full classroom roster
     printAttendanceRoster();
 
+    // Check and trigger online Supabase sync if Wi-Fi enabled and session is present
+    bool syncedOnline = false;
+    if (isAttendance && strlen(sessionId) > 0) {
+        syncedOnline = syncAttendanceWithSupabase(sessionId, studentId, studentName, deviceMac, hopCount);
+    }
+
     // Send ACK back to the client
-    sendAck(packetId, isNewAttendee ? "RECORDED" : "ALREADY_RECORDED", lectureAttendeeCount);
+    const char* ackStatus = isNewAttendee 
+        ? (syncedOnline ? "VERIFIED_ONLINE" : "RECORDED") 
+        : "ALREADY_RECORDED";
+    sendAck(packetId, ackStatus, lectureAttendeeCount, syncedOnline);
     acksGenerated++;
 
     // Update status characteristic so other clients receive updated count
@@ -627,14 +708,15 @@ void printAttendanceRoster() {
 
 // ─── ACK Generation ─────────────────────────────────────────────
 
-void sendAck(const char* packetId, const char* status, int count) {
-    // Build ACK JSON with attendee count
-    char ackJson[160];
+void sendAck(const char* packetId, const char* status, int count, bool syncedOnline) {
+    // Build ACK JSON with attendee count and online sync status
+    char ackJson[192];
     snprintf(ackJson, sizeof(ackJson),
-        "{\"v\":1,\"t\":\"ACK\",\"pid\":\"%s\",\"gid\":\"%s\",\"s\":\"%s\",\"count\":%d}",
-        packetId, GATEWAY_DEVICE_NAME, status, count);
+        "{\"v\":1,\"t\":\"ACK\",\"pid\":\"%s\",\"gid\":\"%s\",\"s\":\"%s\",\"count\":%d,\"sync\":%s}",
+        packetId, GATEWAY_DEVICE_NAME, status, count, syncedOnline ? "true" : "false");
 
-    Serial.printf("  [ACK] %s → %s (attendees: %d)\n", packetId, status, count);
+    Serial.printf("  [ACK] %s → %s (attendees: %d, sync: %s)\n",
+                  packetId, status, count, syncedOnline ? "ONLINE" : "LOCAL");
 
     // Send via NOTIFY if clients are subscribed
     if (pAckChar != nullptr && connectedClients > 0) {
@@ -1140,6 +1222,28 @@ void setup() {
     pBLEScan->setWindow(48);           // 30ms scan window (~30% duty cycle)
 
     Serial.println("[INIT] > Scanner configured");
+
+    // ─── Initialize Wi-Fi (Step 2) ───
+#if WIFI_ENABLED
+    Serial.print("[INIT] Connecting to Wi-Fi: ");
+    Serial.println(WIFI_SSID);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    int wifiWait = 0;
+    while (WiFi.status() != WL_CONNECTED && wifiWait < 15) {
+        delay(400);
+        Serial.print(".");
+        wifiWait++;
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.printf("\n[INIT] > Wi-Fi Connected! Gateway IP: %s\n", WiFi.localIP().toString().c_str());
+        Serial.printf("[INIT] > Supabase Backend: %s\n", SUPABASE_URL);
+    } else {
+        Serial.println("\n[INIT] > Wi-Fi offline or timed out. Operating in offline BLE mode.");
+    }
+#else
+    Serial.println("[INIT] Wi-Fi sync disabled (WIFI_ENABLED=0). Operating in local BLE mode.");
+#endif
 
     // Initialization complete — green flash
     neopixelWrite(STATUS_LED_PIN, 0, 20, 0);
