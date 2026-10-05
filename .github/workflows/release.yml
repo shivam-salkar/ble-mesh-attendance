@@ -110,23 +110,42 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ steps.vars.outputs.VERSION }}" \
-            "$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-arm64-v8a.apk#ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-arm64-v8a.apk" \
-            "$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-universal.apk#ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-universal.apk" \
-            "$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}.ipa#ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}.ipa" \
-            --title "BLE Mesh Attendance ${{ steps.vars.outputs.VERSION }}" \
-            --notes "### BLE Mesh Attendance Mobile App Release ${{ steps.vars.outputs.VERSION }}
+          cat << 'EOF' > release_notes.md
+          ### BLE Mesh Attendance Mobile App Release ${{ steps.vars.outputs.VERSION }}
 
           #### 📦 Available Downloads:
 
           | File | Description |
           | :--- | :--- |
-          | **\`ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-arm64-v8a.apk\`** | ⚡ **Recommended** for modern Android devices (64-bit ARM) |
-          | **\`ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-universal.apk\`** | 🌐 **Universal Android** — compatible with all Android devices & tablets |
-          | **\`ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}.ipa\`** | 🍎 **iOS Unsigned IPA** (Install via AltStore / Sideloadly / TrollStore / Scarlet) |
+          | **`ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-arm64-v8a.apk`** | ⚡ **Recommended** for modern Android devices (64-bit ARM) |
+          | **`ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-universal.apk`** | 🌐 **Universal Android** — compatible with all Android devices & tablets |
+          | **`ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}.ipa`** | 🍎 **iOS Unsigned IPA** (Install via AltStore / Sideloadly / TrollStore / Scarlet) |
 
           #### 🚀 Highlights in this Release:
           - 👤 **Student Profile & Device MAC Binding**: Persistent storage of Student Full Name, Roll ID, and authentic IEEE 802 formatted MAC address.
-          - 📱 **Student-Friendly UI**: Redesigned 2-tab interface featuring one-tap 'MARK MY ATTENDANCE', verified attendance badge with live timestamp, and on-screen 'Lecture Attendees' roster.
-          - 📡 **Classroom Gateway Integration**: Fully compatible with ESP32-S3 gateway firmware with deduplication and serial attendance reports.
-          - 🔗 **Dual-Role BLE Mesh**: Packet relay engine with bounded in-memory cache and TTL hop enforcement."
+          - 📱 **Realtime Attendance Sessions**: Supabase Realtime integration with role-based faculty & student portals.
+          - 📡 **Classroom Gateway Integration**: Fully compatible with ESP32-S3 gateway firmware with deduplication, session nonce validation, and serial/cloud attendance reporting.
+          - 🔗 **Dual-Role BLE Mesh**: Packet relay engine with bounded in-memory cache and TTL hop enforcement.
+          EOF
+
+          ARM_APK="$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-arm64-v8a.apk"
+          UNI_APK="$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-universal.apk"
+          IOS_IPA="$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}.ipa"
+
+          if gh release view "${{ steps.vars.outputs.VERSION }}" >/dev/null 2>&1; then
+            echo "Release ${{ steps.vars.outputs.VERSION }} already exists. Overwriting assets and updating notes..."
+            gh release upload "${{ steps.vars.outputs.VERSION }}" \
+              "$ARM_APK" "$UNI_APK" "$IOS_IPA" \
+              --clobber
+            gh release edit "${{ steps.vars.outputs.VERSION }}" \
+              --title "BLE Mesh Attendance ${{ steps.vars.outputs.VERSION }}" \
+              --notes-file release_notes.md
+          else
+            echo "Creating new release ${{ steps.vars.outputs.VERSION }}..."
+            gh release create "${{ steps.vars.outputs.VERSION }}" \
+              "$ARM_APK#ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-arm64-v8a.apk" \
+              "$UNI_APK#ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-universal.apk" \
+              "$IOS_IPA#ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}.ipa" \
+              --title "BLE Mesh Attendance ${{ steps.vars.outputs.VERSION }}" \
+              --notes-file release_notes.md
+          fi
