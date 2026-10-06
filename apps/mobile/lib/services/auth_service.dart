@@ -78,12 +78,17 @@ class AuthService extends ChangeNotifier {
       final response = await SupabaseConfig.client.auth.signUp(
         email: email.trim(),
         password: password,
+        data: {
+          'name': name.trim(),
+          'role': role.name,
+          if (rollNumber != null) 'roll_number': rollNumber.trim(),
+        },
       );
 
       final user = response.user;
       if (user == null) throw Exception('Signup failed');
 
-      // Insert into public.profiles
+      // Insert or update into public.profiles
       final profileData = {
         'auth_user_id': user.id,
         'name': name.trim(),
@@ -94,7 +99,7 @@ class AuthService extends ChangeNotifier {
 
       final insertRes = await SupabaseConfig.client
           .from('profiles')
-          .insert(profileData)
+          .upsert(profileData, onConflict: 'email')
           .select()
           .single();
 
@@ -111,11 +116,24 @@ class AuthService extends ChangeNotifier {
   /// Fetch user profile from Supabase `profiles` table.
   Future<UserProfile?> fetchProfile(String authUserId) async {
     try {
-      final data = await SupabaseConfig.client
+      var data = await SupabaseConfig.client
           .from('profiles')
           .select()
           .eq('auth_user_id', authUserId)
           .maybeSingle();
+
+      // If not linked by auth_user_id yet, lookup by email and link auth_user_id
+      if (data == null) {
+        final currentEmail = SupabaseConfig.client.auth.currentUser?.email;
+        if (currentEmail != null && currentEmail.isNotEmpty) {
+          data = await SupabaseConfig.client
+              .from('profiles')
+              .update({'auth_user_id': authUserId})
+              .eq('email', currentEmail)
+              .select()
+              .maybeSingle();
+        }
+      }
 
       if (data != null) {
         _currentProfile = UserProfile.fromJson(data);

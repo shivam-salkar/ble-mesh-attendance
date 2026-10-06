@@ -455,7 +455,7 @@ bool syncAttendanceWithSupabase(const char* sessionId, const char* studentId, co
     http.addHeader("Content-Type", "application/json");
     http.addHeader("apikey", SUPABASE_KEY);
     http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
-    http.addHeader("Prefer", "return=minimal");
+    http.addHeader("Prefer", "resolution=merge-duplicates,return=minimal");
 
     char postBody[384];
     snprintf(postBody, sizeof(postBody),

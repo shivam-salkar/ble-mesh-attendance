@@ -200,11 +200,34 @@ class AttendanceService extends ChangeNotifier {
               column: 'session_id',
               value: sessionId,
             ),
-            callback: (payload) {
-              final newRecord = AttendanceRecord.fromJson(payload.newRecord);
-              if (!_sessionRecords.any((r) => r.studentId == newRecord.studentId)) {
-                _sessionRecords.insert(0, newRecord);
+            callback: (payload) async {
+              try {
+                final recordId = payload.newRecord['id'];
+                AttendanceRecord newRecord;
+                if (recordId != null) {
+                  final full = await SupabaseConfig.client
+                      .from('attendance_records')
+                      .select('*, profiles(name, roll_number)')
+                      .eq('id', recordId)
+                      .single();
+                  newRecord = AttendanceRecord.fromJson(full);
+                } else {
+                  newRecord = AttendanceRecord.fromJson(payload.newRecord);
+                }
+
+                final existingIdx = _sessionRecords.indexWhere((r) => r.studentId == newRecord.studentId);
+                if (existingIdx >= 0) {
+                  _sessionRecords[existingIdx] = newRecord;
+                } else {
+                  _sessionRecords.insert(0, newRecord);
+                }
                 notifyListeners();
+              } catch (e) {
+                final fallbackRecord = AttendanceRecord.fromJson(payload.newRecord);
+                if (!_sessionRecords.any((r) => r.studentId == fallbackRecord.studentId)) {
+                  _sessionRecords.insert(0, fallbackRecord);
+                  notifyListeners();
+                }
               }
             },
           )
@@ -214,7 +237,108 @@ class AttendanceService extends ChangeNotifier {
     }
   }
 
+  /// Fetch all attendance records for a specific session (e.g. on teacher portal load).
+  Future<List<AttendanceRecord>> fetchSessionRecords(String sessionId) async {
+    if (!SupabaseConfig.isInitialized) return _sessionRecords;
+
+    try {
+      final res = await SupabaseConfig.client
+          .from('attendance_records')
+          .select('*, profiles(name, roll_number)')
+          .eq('session_id', sessionId)
+          .order('submitted_at', ascending: false);
+
+      final records = (res as List)
+          .map((item) => AttendanceRecord.fromJson(item as Map<String, dynamic>))
+          .toList();
+
+      _sessionRecords.clear();
+      _sessionRecords.addAll(records);
+      notifyListeners();
+      return _sessionRecords;
+    } catch (e) {
+      debugPrint('[AttendanceService] fetchSessionRecords error: $e');
+      return _sessionRecords;
+    }
+  }
+
+  /// Automatically restore an ongoing active session for a teacher if one exists.
+  Future<AttendanceSession?> fetchActiveSessionForTeacher(String teacherId) async {
+    if (!SupabaseConfig.isInitialized) return _activeSession;
+
+    try {
+      final res = await SupabaseConfig.client
+          .from('attendance_sessions')
+          .select('*, subjects(name, code), classes(name), classrooms(name)')
+          .eq('teacher_id', teacherId)
+          .eq('status', 'ACTIVE')
+          .gt('expires_at', DateTime.now().toIso8601String())
+          .order('started_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      if (res != null) {
+        _activeSession = AttendanceSession.fromJson(res);
+        await fetchSessionRecords(_activeSession!.id);
+        listenToSessionRecords(_activeSession!.id);
+        notifyListeners();
+        return _activeSession;
+      }
+    } catch (e) {
+      debugPrint('[AttendanceService] fetchActiveSessionForTeacher error: $e');
+    }
+    return null;
+  }
+
   // ─── STUDENT OPERATIONS ──────────────────────────────────────────────
+
+  /// Fetch class ID for a student from class_members mapping.
+  Future<String> fetchStudentClassId(String studentId) async {
+    if (!SupabaseConfig.isInitialized) return '33333333-3333-3333-3333-333333333301';
+
+    try {
+      final res = await SupabaseConfig.client
+          .from('class_members')
+          .select('class_id')
+          .eq('student_id', studentId)
+          .limit(1)
+          .maybeSingle();
+
+      if (res != null && res['class_id'] != null) {
+        return res['class_id'] as String;
+      }
+    } catch (e) {
+      debugPrint('[AttendanceService] fetchStudentClassId error: $e');
+    }
+    return '33333333-3333-3333-3333-333333333301';
+  }
+
+  /// Check if student has already marked attendance for this session.
+  Future<AttendanceRecord?> checkExistingAttendance(String sessionId, String studentId) async {
+    if (!SupabaseConfig.isInitialized) {
+      try {
+        return _sessionRecords.firstWhere((r) => r.sessionId == sessionId && r.studentId == studentId);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    try {
+      final res = await SupabaseConfig.client
+          .from('attendance_records')
+          .select('*, profiles(name, roll_number)')
+          .eq('session_id', sessionId)
+          .eq('student_id', studentId)
+          .maybeSingle();
+
+      if (res != null) {
+        return AttendanceRecord.fromJson(res);
+      }
+    } catch (e) {
+      debugPrint('[AttendanceService] checkExistingAttendance error: $e');
+    }
+    return null;
+  }
 
   /// Subscribe students to ACTIVE attendance sessions in realtime.
   void subscribeToActiveSessions({
@@ -263,15 +387,31 @@ class AttendanceService extends ChangeNotifier {
               column: 'class_id',
               value: classId,
             ),
-            callback: (payload) {
+            callback: (payload) async {
               final record = payload.newRecord;
               if (record.isNotEmpty && record['status'] == 'ACTIVE') {
-                final session = AttendanceSession.fromJson(record);
-                if (session.isActive) {
-                  _activeSession = session;
-                  notifyListeners();
-                  onSessionChange(session);
-                  return;
+                try {
+                  // Fetch enriched session with subject and classroom joins
+                  final full = await SupabaseConfig.client
+                      .from('attendance_sessions')
+                      .select('*, subjects(name, code), classes(name), classrooms(name)')
+                      .eq('id', record['id'])
+                      .single();
+                  final session = AttendanceSession.fromJson(full);
+                  if (session.isActive) {
+                    _activeSession = session;
+                    notifyListeners();
+                    onSessionChange(session);
+                    return;
+                  }
+                } catch (_) {
+                  final session = AttendanceSession.fromJson(record);
+                  if (session.isActive) {
+                    _activeSession = session;
+                    notifyListeners();
+                    onSessionChange(session);
+                    return;
+                  }
                 }
               }
               _activeSession = null;
@@ -286,7 +426,7 @@ class AttendanceService extends ChangeNotifier {
     }
   }
 
-  /// Phase 13: Temporary direct development attendance submission.
+  /// Phase 13: Direct development attendance submission with upsert.
   Future<AttendanceRecord> submitDevelopmentAttendance({
     required String sessionId,
     required String studentId,
@@ -328,15 +468,18 @@ class AttendanceService extends ChangeNotifier {
 
       final res = await SupabaseConfig.client
           .from('attendance_records')
-          .insert(insertData)
+          .upsert(insertData, onConflict: 'student_id,session_id')
           .select('*, profiles(name, roll_number)')
           .single();
 
       final saved = AttendanceRecord.fromJson(res);
-      if (!_sessionRecords.any((r) => r.studentId == studentId)) {
+      final existingIdx = _sessionRecords.indexWhere((r) => r.studentId == studentId);
+      if (existingIdx >= 0) {
+        _sessionRecords[existingIdx] = saved;
+      } else {
         _sessionRecords.insert(0, saved);
-        notifyListeners();
       }
+      notifyListeners();
       return saved;
     } catch (e) {
       debugPrint('[AttendanceService] submitDevelopmentAttendance error: $e');
@@ -349,7 +492,7 @@ class AttendanceService extends ChangeNotifier {
     }
   }
 
-  /// Records attendance verified by BLE Gateway or Bluetooth Mesh.
+  /// Records attendance verified by BLE Gateway or Bluetooth Mesh with upsert.
   Future<AttendanceRecord> submitVerifiedAttendance({
     required String sessionId,
     required String studentId,
@@ -406,15 +549,18 @@ class AttendanceService extends ChangeNotifier {
 
       final res = await SupabaseConfig.client
           .from('attendance_records')
-          .insert(insertData)
+          .upsert(insertData, onConflict: 'student_id,session_id')
           .select('*, profiles(name, roll_number)')
           .single();
 
       final saved = AttendanceRecord.fromJson(res);
-      if (!_sessionRecords.any((r) => r.studentId == studentId)) {
+      final existingIdx = _sessionRecords.indexWhere((r) => r.studentId == studentId);
+      if (existingIdx >= 0) {
+        _sessionRecords[existingIdx] = saved;
+      } else {
         _sessionRecords.insert(0, saved);
-        notifyListeners();
       }
+      notifyListeners();
       return saved;
     } catch (e) {
       debugPrint('[AttendanceService] submitVerifiedAttendance error: $e');

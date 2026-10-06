@@ -33,22 +33,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   void initState() {
     super.initState();
     _loadProfile();
-
-    // Subscribe to active attendance sessions in realtime
-    _attendanceService.subscribeToActiveSessions(
-      classId: '33333333-3333-3333-3333-333333333301', // CMPN-C default
-      onSessionChange: (session) {
-        if (mounted) {
-          setState(() {
-            _activeSession = session;
-            // Reset marked record if new session
-            if (_markedRecord != null && _markedRecord!.sessionId != session?.id) {
-              _markedRecord = null;
-            }
-          });
-        }
-      },
-    );
+    _initStudentSession();
 
     // Countdown ticker every second
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -64,6 +49,32 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   void dispose() {
     _countdownTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _initStudentSession() async {
+    final studentId = _authService.currentProfile?.id ?? '55555555-5555-5555-5555-555555555501';
+    final classId = await _attendanceService.fetchStudentClassId(studentId);
+
+    _attendanceService.subscribeToActiveSessions(
+      classId: classId,
+      onSessionChange: (session) async {
+        if (!mounted) return;
+        AttendanceRecord? existingRecord;
+        if (session != null) {
+          existingRecord = await _attendanceService.checkExistingAttendance(session.id, studentId);
+        }
+        if (mounted) {
+          setState(() {
+            _activeSession = session;
+            if (existingRecord != null) {
+              _markedRecord = existingRecord;
+            } else if (_markedRecord != null && _markedRecord!.sessionId != session?.id) {
+              _markedRecord = null;
+            }
+          });
+        }
+      },
+    );
   }
 
   Future<void> _loadProfile() async {

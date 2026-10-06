@@ -54,6 +54,7 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
     final teacherId = _authService.currentProfile?.id ?? '44444444-4444-4444-4444-444444444401';
     final subjects = await _attendanceService.fetchTeacherSubjects(teacherId);
     final classrooms = await _attendanceService.fetchClassrooms();
+    await _attendanceService.fetchActiveSessionForTeacher(teacherId);
 
     if (mounted) {
       setState(() {
