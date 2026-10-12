@@ -162,28 +162,34 @@ class AuthService extends ChangeNotifier {
   /// Demo mock login helper for instant testing and offline environments.
   UserProfile _mockSignIn(String email) {
     final lower = email.toLowerCase().trim();
+    final namePart = email.contains('@') ? email.split('@').first : email;
+    final displayName = namePart.isNotEmpty
+        ? namePart[0].toUpperCase() + namePart.substring(1)
+        : 'User';
+    final generatedId = 'user_${email.hashCode.abs()}';
+
     if (lower.contains('teacher') || lower.contains('prof')) {
       _currentProfile = UserProfile(
-        id: '44444444-4444-4444-4444-444444444401',
-        name: 'Prof. Sharma',
+        id: generatedId,
+        name: displayName.startsWith('Prof') ? displayName : 'Prof. $displayName',
         email: email,
         role: UserRole.teacher,
         createdAt: DateTime.now(),
       );
     } else if (lower.contains('admin')) {
       _currentProfile = UserProfile(
-        id: '99999999-9999-9999-9999-999999999901',
-        name: 'System Admin',
+        id: generatedId,
+        name: 'Admin $displayName',
         email: email,
         role: UserRole.admin,
         createdAt: DateTime.now(),
       );
     } else {
       _currentProfile = UserProfile(
-        id: '55555555-5555-5555-5555-555555555501',
-        name: 'Aryan Darekar',
+        id: generatedId,
+        name: displayName,
         email: email,
-        rollNumber: '25102C0040',
+        rollNumber: 'STU-${email.hashCode.abs().toString().padLeft(6, '0').substring(0, 6)}',
         role: UserRole.student,
         createdAt: DateTime.now(),
       );

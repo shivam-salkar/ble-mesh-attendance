@@ -29,7 +29,7 @@ void main() {
       expect(profile.role, UserRole.student);
       expect(profile.isStudent, isTrue);
       expect(profile.isTeacher, isFalse);
-      expect(authService.currentProfile?.name, 'Aryan Darekar');
+      expect(authService.currentProfile?.name, isNotEmpty);
     });
 
     test('Sign out clears the active profile', () async {

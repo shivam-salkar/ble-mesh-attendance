@@ -40,7 +40,7 @@ class AttendanceService extends ChangeNotifier {
           .toList();
     } catch (e) {
       debugPrint('[AttendanceService] fetchTeacherSubjects error: $e');
-      return _mockSubjects;
+      return [];
     }
   }
 
@@ -61,7 +61,113 @@ class AttendanceService extends ChangeNotifier {
           .toList();
     } catch (e) {
       debugPrint('[AttendanceService] fetchClassrooms error: $e');
-      return _mockClassrooms;
+      return [];
+    }
+  }
+
+  /// Create a new subject with associated class and classroom if they don't already exist.
+  Future<Subject> createSubjectWithClassAndRoom({
+    required String subjectName,
+    required String subjectCode,
+    required String className,
+    required String teacherId,
+    String branch = 'Computer Engineering',
+    int semester = 5,
+    String roomName = 'Room 101',
+    String building = 'Main Academic Block',
+    String? gatewayCode,
+  }) async {
+    if (!SupabaseConfig.isInitialized) {
+      final mock = Subject(
+        id: 'subj-${DateTime.now().millisecondsSinceEpoch}',
+        name: subjectName,
+        code: subjectCode,
+        classId: 'class-${DateTime.now().millisecondsSinceEpoch}',
+        className: className,
+        teacherId: teacherId,
+      );
+      return mock;
+    }
+
+    try {
+      // 1. Get or create class
+      final existingClass = await SupabaseConfig.client
+          .from('classes')
+          .select()
+          .eq('name', className.trim())
+          .maybeSingle();
+
+      String classId;
+      if (existingClass != null) {
+        classId = existingClass['id'] as String;
+      } else {
+        final insertedClass = await SupabaseConfig.client
+            .from('classes')
+            .insert({
+              'name': className.trim(),
+              'branch': branch.trim(),
+              'semester': semester,
+              'academic_year': '${DateTime.now().year}-${(DateTime.now().year + 1).toString().substring(2)}',
+            })
+            .select()
+            .single();
+        classId = insertedClass['id'] as String;
+      }
+
+      // 2. Get or create classroom
+      final existingRoom = await SupabaseConfig.client
+          .from('classrooms')
+          .select()
+          .eq('name', roomName.trim())
+          .maybeSingle();
+
+      String roomId;
+      final finalGatewayCode = (gatewayCode != null && gatewayCode.trim().isNotEmpty)
+          ? gatewayCode.trim()
+          : 'ESP32_${roomName.trim().replaceAll(' ', '_').toUpperCase()}';
+
+      if (existingRoom != null) {
+        roomId = existingRoom['id'] as String;
+      } else {
+        final insertedRoom = await SupabaseConfig.client
+            .from('classrooms')
+            .insert({
+              'name': roomName.trim(),
+              'building': building.trim(),
+              'gateway_id': finalGatewayCode,
+            })
+            .select()
+            .single();
+        roomId = insertedRoom['id'] as String;
+      }
+
+      // 3. Register gateway if not exists
+      try {
+        await SupabaseConfig.client.from('gateways').upsert({
+          'gateway_code': finalGatewayCode,
+          'name': '$roomName Gateway',
+          'classroom_id': roomId,
+          'status': 'ONLINE',
+          'firmware_version': 'v0.5.0-phase4',
+        }, onConflict: 'gateway_code');
+      } catch (_) {}
+
+      // 4. Create subject
+      final insertedSubj = await SupabaseConfig.client
+          .from('subjects')
+          .insert({
+            'name': subjectName.trim(),
+            'code': subjectCode.trim(),
+            'class_id': classId,
+            'teacher_id': teacherId,
+          })
+          .select('*, classes(name)')
+          .single();
+
+      return Subject.fromJson(insertedSubj);
+    } catch (e) {
+      debugPrint('[AttendanceService] createSubjectWithClassAndRoom error: $e');
+      rethrow;
     }
   }
 
@@ -292,8 +398,42 @@ class AttendanceService extends ChangeNotifier {
 
   // ─── STUDENT OPERATIONS ──────────────────────────────────────────────
 
-  /// Fetch class ID for a student from class_members mapping.
-  Future<String> fetchStudentClassId(String studentId) async {
+  /// Fetch list of all classes in the college/system.
+  Future<List<Map<String, dynamic>>> fetchAvailableClasses() async {
+    if (!SupabaseConfig.isInitialized) return [];
+
+    try {
+      final res = await SupabaseConfig.client
+          .from('classes')
+          .select('id, name, branch, semester')
+          .order('name');
+      return List<Map<String, dynamic>>.from(res as List);
+    } catch (e) {
+      debugPrint('[AttendanceService] fetchAvailableClasses error: $e');
+      return [];
+    }
+  }
+
+  /// Enroll or switch student into a class.
+  Future<void> enrollStudentInClass({
+    required String studentId,
+    required String classId,
+  }) async {
+    if (!SupabaseConfig.isInitialized) return;
+
+    try {
+      await SupabaseConfig.client.from('class_members').upsert({
+        'student_id': studentId,
+        'class_id': classId,
+      });
+    } catch (e) {
+      debugPrint('[AttendanceService] enrollStudentInClass error: $e');
+      rethrow;
+    }
+  }
+
+  /// Fetch class ID for a student from class_members mapping, or auto-enroll into available class.
+  Future<String?> fetchStudentClassId(String studentId) async {
     if (!SupabaseConfig.isInitialized) return '33333333-3333-3333-3333-333333333301';
 
     try {
@@ -307,10 +447,26 @@ class AttendanceService extends ChangeNotifier {
       if (res != null && res['class_id'] != null) {
         return res['class_id'] as String;
       }
+
+      // If student has no enrolled class, check if any class exists to auto-enroll
+      final classes = await SupabaseConfig.client
+          .from('classes')
+          .select('id')
+          .order('created_at', ascending: false)
+          .limit(5);
+
+      if (classes.isNotEmpty) {
+        final defaultClassId = classes.first['id'] as String;
+        await SupabaseConfig.client.from('class_members').upsert({
+          'student_id': studentId,
+          'class_id': defaultClassId,
+        });
+        return defaultClassId;
+      }
     } catch (e) {
       debugPrint('[AttendanceService] fetchStudentClassId error: $e');
     }
-    return '33333333-3333-3333-3333-333333333301';
+    return null;
   }
 
   /// Check if student has already marked attendance for this session.
@@ -346,6 +502,11 @@ class AttendanceService extends ChangeNotifier {
     required void Function(AttendanceSession?) onSessionChange,
   }) {
     _sessionSubscription?.unsubscribe();
+
+    if (classId.isEmpty) {
+      onSessionChange(null);
+      return;
+    }
 
     if (!SupabaseConfig.isInitialized) {
       // In mock/development mode, notify with the current in-memory active session

@@ -28,6 +28,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   String _submissionStatus = '';
   Timer? _countdownTimer;
   List<AttendanceRecord> _history = [];
+  String? _currentClassId;
 
   @override
   void initState() {
@@ -52,8 +53,15 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   }
 
   Future<void> _initStudentSession() async {
-    final studentId = _authService.currentProfile?.id ?? '55555555-5555-5555-5555-555555555501';
+    final studentId = _authService.currentProfile?.id ?? (_studentProfile?.studentId ?? 'student-1');
     final classId = await _attendanceService.fetchStudentClassId(studentId);
+
+    if (mounted) setState(() => _currentClassId = classId);
+
+    if (classId == null || classId.isEmpty) {
+      if (mounted) setState(() => _activeSession = null);
+      return;
+    }
 
     _attendanceService.subscribeToActiveSessions(
       classId: classId,
@@ -83,7 +91,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   }
 
   Future<void> _loadHistory() async {
-    final studentId = _authService.currentProfile?.id ?? '55555555-5555-5555-5555-555555555501';
+    final studentId = _authService.currentProfile?.id ?? (_studentProfile?.studentId ?? 'student-1');
     final history = await _attendanceService.fetchStudentHistory(studentId);
     if (mounted) setState(() => _history = history);
   }
@@ -96,9 +104,10 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
       _submissionStatus = 'Scanning for ESP32 Gateway...';
     });
     final user = _authService.currentProfile;
-    final studentName = user?.name ?? (_studentProfile?.name ?? 'Aryan Darekar');
-    final rollNumber = user?.rollNumber ?? (_studentProfile?.studentId ?? '25102C0040');
+    final studentName = user?.name ?? (_studentProfile?.name ?? 'Student');
+    final rollNumber = user?.rollNumber ?? (_studentProfile?.studentId ?? 'N/A');
     final macAddress = _studentProfile?.macAddress ?? '';
+    final studentId = user?.id ?? (_studentProfile?.studentId ?? 'student-1');
 
     try {
       bool bleSuccess = false;
@@ -121,7 +130,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
       if (bleSuccess) {
         record = await _attendanceService.submitVerifiedAttendance(
           sessionId: _activeSession!.id,
-          studentId: user?.id ?? '55555555-5555-5555-5555-555555555501',
+          studentId: studentId,
           studentName: studentName,
           rollNumber: rollNumber,
           macAddress: macAddress,
@@ -132,7 +141,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
         // Fallback for emulator / lab development without hardware nearby
         record = await _attendanceService.submitDevelopmentAttendance(
           sessionId: _activeSession!.id,
-          studentId: user?.id ?? '55555555-5555-5555-5555-555555555501',
+          studentId: studentId,
           studentName: studentName,
           rollNumber: rollNumber,
         );
@@ -234,13 +243,13 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                profile?.name ?? (_studentProfile?.name ?? 'Aryan Darekar'),
+                                profile?.name ?? (_studentProfile?.name ?? 'Student'),
                                 style: theme.textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
                               Text(
-                                'Roll: ${profile?.rollNumber ?? (_studentProfile?.studentId ?? "25102C0040")} • Class: CMPN-C',
+                                'Roll: ${profile?.rollNumber ?? (_studentProfile?.studentId ?? "N/A")} • Class: ${_currentClassId != null ? "Enrolled" : "No Active Class"}',
                                 style: theme.textTheme.bodySmall?.copyWith(
                                   color: theme.colorScheme.onSurfaceVariant,
                                 ),
@@ -265,7 +274,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
                           Icon(Icons.bluetooth, size: 16, color: theme.colorScheme.primary),
                           const SizedBox(width: 6),
                           Text(
-                            'Linked Device MAC: ${_studentProfile?.macAddress ?? "DA:A1:8B:2F:3C:90"}',
+                            'Linked Device MAC: ${_studentProfile?.macAddress ?? "Pending BLE Setup"}',
                             style: TextStyle(
                               fontFamily: 'monospace',
                               fontSize: 12,
@@ -382,11 +391,11 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
           ),
           const SizedBox(height: 12),
           Text(
-            '${session.subjectName ?? "Database Systems"} (${session.subjectCode ?? "DBMS"})',
+            '${session.subjectName ?? "Active Lecture"}${session.subjectCode != null ? " (${session.subjectCode})" : ""}',
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
           Text(
-            'Room: ${session.classroomName ?? "Room 405"} • Faculty: ${session.teacherName ?? "Prof. Sharma"}',
+            'Room: ${session.classroomName ?? "Assigned Classroom"} • Faculty: ${session.teacherName ?? "Course Faculty"}',
             style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
           ),
           const SizedBox(height: 20),
@@ -506,8 +515,8 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
           backgroundColor: Colors.green.shade100,
           child: Icon(Icons.check, color: Colors.green.shade800),
         ),
-        title: const Text('Database Management Systems (DBMS)', style: TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text('Classroom: Room 405 • $timeStr'),
+        title: const Text('Lecture Attendance Verified', style: TextStyle(fontWeight: FontWeight.bold)),
+        subtitle: Text('Recorded: $timeStr • Status: ${record.status}'),
         trailing: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(

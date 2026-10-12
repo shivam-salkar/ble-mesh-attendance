@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../../services/auth_service.dart';
+import '../../../models/profile.dart';
 import '../../teacher/screens/teacher_dashboard_screen.dart';
 import '../../student/screens/student_dashboard_screen.dart';
 import '../../../screens/ble_test_screen.dart';
@@ -12,8 +13,13 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _emailController = TextEditingController(text: 'student@college.edu');
-  final _passwordController = TextEditingController(text: 'password123');
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _nameController = TextEditingController();
+  final _rollNumberController = TextEditingController();
+
+  bool _isSignUp = false;
+  UserRole _selectedRole = UserRole.student;
   bool _isLoading = false;
   String? _errorMessage;
 
@@ -23,17 +29,74 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
+    _nameController.dispose();
+    _rollNumberController.dispose();
     super.dispose();
   }
 
-  Future<void> _handleLogin({String? overrideEmail}) async {
-    final email = overrideEmail ?? _emailController.text.trim();
+  Future<void> _handleSubmit() async {
+    final email = _emailController.text.trim();
     final password = _passwordController.text;
 
     if (email.isEmpty) {
-      setState(() => _errorMessage = 'Please enter your email');
+      setState(() => _errorMessage = 'Please enter your institutional email');
       return;
     }
+
+    if (password.isEmpty) {
+      setState(() => _errorMessage = 'Please enter your password');
+      return;
+    }
+
+    if (_isSignUp && _nameController.text.trim().isEmpty) {
+      setState(() => _errorMessage = 'Please enter your full name');
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final UserProfile profile;
+      if (_isSignUp) {
+        profile = await _authService.signUp(
+          email: email,
+          password: password,
+          name: _nameController.text.trim(),
+          role: _selectedRole,
+          rollNumber: _selectedRole == UserRole.student
+              ? _rollNumberController.text.trim()
+              : null,
+        );
+      } else {
+        profile = await _authService.signIn(email: email, password: password);
+      }
+
+      if (!mounted) return;
+
+      if (profile.isTeacher) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const TeacherDashboardScreen()),
+        );
+      } else {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const StudentDashboardScreen()),
+        );
+      }
+    } catch (e) {
+      setState(() => _errorMessage = e.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _handleQuickRole(UserRole role) async {
+    final email = role == UserRole.teacher ? 'teacher@college.edu' : 'student@college.edu';
+    final password = 'password123';
+    _emailController.text = email;
+    _passwordController.text = password;
 
     setState(() {
       _isLoading = true;
@@ -106,7 +169,72 @@ class _LoginScreenState extends State<LoginScreen> {
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(height: 36),
+                  const SizedBox(height: 28),
+
+                  // Mode Toggle (Sign In vs Register)
+                  Container(
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest.withAlpha(128),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: InkWell(
+                            onTap: () => setState(() {
+                              _isSignUp = false;
+                              _errorMessage = null;
+                            }),
+                            borderRadius: BorderRadius.circular(12),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              decoration: BoxDecoration(
+                                color: !_isSignUp ? theme.colorScheme.primary : Colors.transparent,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                'Sign In',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: !_isSignUp
+                                      ? theme.colorScheme.onPrimary
+                                      : theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: InkWell(
+                            onTap: () => setState(() {
+                              _isSignUp = true;
+                              _errorMessage = null;
+                            }),
+                            borderRadius: BorderRadius.circular(12),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              decoration: BoxDecoration(
+                                color: _isSignUp ? theme.colorScheme.primary : Colors.transparent,
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(
+                                'Create Account',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: _isSignUp
+                                      ? theme.colorScheme.onPrimary
+                                      : theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
 
                   // Error message banner
                   if (_errorMessage != null) ...[
@@ -122,6 +250,48 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
+                  ],
+
+                  // Conditional Sign Up Fields
+                  if (_isSignUp) ...[
+                    TextField(
+                      controller: _nameController,
+                      decoration: InputDecoration(
+                        labelText: 'Full Name',
+                        prefixIcon: const Icon(Icons.person_outline),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    // Role Selection
+                    SegmentedButton<UserRole>(
+                      segments: const [
+                        ButtonSegment(
+                          value: UserRole.student,
+                          label: Text('Student'),
+                          icon: Icon(Icons.person_outline),
+                        ),
+                        ButtonSegment(
+                          value: UserRole.teacher,
+                          label: Text('Teacher'),
+                          icon: Icon(Icons.school_outlined),
+                        ),
+                      ],
+                      selected: {_selectedRole},
+                      onSelectionChanged: (set) => setState(() => _selectedRole = set.first),
+                    ),
+                    if (_selectedRole == UserRole.student) ...[
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: _rollNumberController,
+                        decoration: InputDecoration(
+                          labelText: 'Student Roll / Enrollment No.',
+                          prefixIcon: const Icon(Icons.badge_outlined),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
                   ],
 
                   // Email input
@@ -148,9 +318,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 24),
 
-                  // Login Button
+                  // Submit Button
                   ElevatedButton(
-                    onPressed: _isLoading ? null : () => _handleLogin(),
+                    onPressed: _isLoading ? null : _handleSubmit,
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       backgroundColor: theme.colorScheme.primary,
@@ -163,9 +333,9 @@ class _LoginScreenState extends State<LoginScreen> {
                             height: 24,
                             child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                           )
-                        : const Text(
-                            'SIGN IN',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        : Text(
+                            _isSignUp ? 'CREATE ACCOUNT' : 'SIGN IN',
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           ),
                   ),
                   const SizedBox(height: 32),
@@ -196,7 +366,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: OutlinedButton.icon(
                           onPressed: _isLoading
                               ? null
-                              : () => _handleLogin(overrideEmail: 'teacher@college.edu'),
+                              : () => _handleQuickRole(UserRole.teacher),
                           icon: const Icon(Icons.school_outlined, size: 18),
                           label: const Text('Teacher'),
                           style: OutlinedButton.styleFrom(
@@ -210,7 +380,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: OutlinedButton.icon(
                           onPressed: _isLoading
                               ? null
-                              : () => _handleLogin(overrideEmail: 'student@college.edu'),
+                              : () => _handleQuickRole(UserRole.student),
                           icon: const Icon(Icons.person_outline, size: 18),
                           label: const Text('Student'),
                           style: OutlinedButton.styleFrom(

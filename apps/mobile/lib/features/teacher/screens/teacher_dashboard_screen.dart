@@ -65,8 +65,103 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
     }
   }
 
+  void _showAddSubjectDialog() {
+    final nameCtrl = TextEditingController();
+    final codeCtrl = TextEditingController();
+    final classCtrl = TextEditingController(text: 'CMPN-A');
+    final roomCtrl = TextEditingController(text: 'Room 101');
+    final gatewayCtrl = TextEditingController();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add Subject & Classroom'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Subject Name (e.g. Operating Systems)',
+                  prefixIcon: Icon(Icons.menu_book),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: codeCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Subject Code (e.g. CS302)',
+                  prefixIcon: Icon(Icons.code),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: classCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Class / Division (e.g. CMPN-A)',
+                  prefixIcon: Icon(Icons.groups),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: roomCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Classroom Name (e.g. Room 405)',
+                  prefixIcon: Icon(Icons.meeting_room),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: gatewayCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Gateway Code (Optional, e.g. ESP32_405)',
+                  prefixIcon: Icon(Icons.router),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              if (nameCtrl.text.trim().isEmpty || codeCtrl.text.trim().isEmpty) return;
+              Navigator.of(ctx).pop();
+              setState(() => _isLoading = true);
+              try {
+                final teacherId = _authService.currentProfile?.id ?? '44444444-4444-4444-4444-444444444401';
+                await _attendanceService.createSubjectWithClassAndRoom(
+                  subjectName: nameCtrl.text.trim(),
+                  subjectCode: codeCtrl.text.trim(),
+                  className: classCtrl.text.trim().isEmpty ? 'CMPN-A' : classCtrl.text.trim(),
+                  teacherId: teacherId,
+                  roomName: roomCtrl.text.trim().isEmpty ? 'Room 101' : roomCtrl.text.trim(),
+                  gatewayCode: gatewayCtrl.text.trim().isEmpty ? null : gatewayCtrl.text.trim(),
+                );
+                await _loadData();
+              } catch (e) {
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Failed to add subject: $e'), backgroundColor: Colors.red),
+                  );
+                }
+              } finally {
+                if (mounted) setState(() => _isLoading = false);
+              }
+            },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showStartAttendanceDialog(Subject subject) {
-    String selectedRoomId = _classrooms.isNotEmpty ? _classrooms.first.id : '11111111-1111-1111-1111-111111111101';
+    String selectedRoomId = _classrooms.isNotEmpty ? _classrooms.first.id : 'default-room';
     int selectedDuration = 5;
     String sessionType = 'LECTURE';
 
@@ -81,23 +176,28 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Class: ${subject.className ?? "CMPN-C"}',
+                  Text('Class: ${subject.className ?? "CMPN-A"}',
                       style: const TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 16),
                   const Text('Select Classroom:'),
-                  DropdownButton<String>(
-                    isExpanded: true,
-                    value: selectedRoomId,
-                    items: _classrooms.map((room) {
-                      return DropdownMenuItem(
-                        value: room.id,
-                        child: Text('${room.name} (${room.building})'),
-                      );
-                    }).toList(),
-                    onChanged: (val) {
-                      if (val != null) setDialogState(() => selectedRoomId = val);
-                    },
-                  ),
+                  _classrooms.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Text('Default Room (ESP32_GATEWAY_DEFAULT)'),
+                        )
+                      : DropdownButton<String>(
+                          isExpanded: true,
+                          value: selectedRoomId == 'default-room' ? _classrooms.first.id : selectedRoomId,
+                          items: _classrooms.map((room) {
+                            return DropdownMenuItem(
+                              value: room.id,
+                              child: Text('${room.name} (${room.building})'),
+                            );
+                          }).toList(),
+                          onChanged: (val) {
+                            if (val != null) setDialogState(() => selectedRoomId = val);
+                          },
+                        ),
                   const SizedBox(height: 16),
                   const Text('Session Duration:'),
                   Row(
@@ -124,18 +224,28 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
               FilledButton.icon(
                 onPressed: () async {
                   Navigator.of(ctx).pop();
-                  final room = _classrooms.firstWhere(
-                    (r) => r.id == selectedRoomId,
-                    orElse: () => _classrooms.first,
-                  );
+                  Classroom room;
+                  if (_classrooms.isNotEmpty) {
+                    room = _classrooms.firstWhere(
+                      (r) => r.id == selectedRoomId,
+                      orElse: () => _classrooms.first,
+                    );
+                  } else {
+                    room = const Classroom(
+                      id: '11111111-1111-1111-1111-111111111101',
+                      name: 'Room 101',
+                      building: 'Main Block',
+                      gatewayId: 'ESP32_GATEWAY_101',
+                    );
+                  }
                   await _attendanceService.startSession(
                     subjectId: subject.id,
                     subjectName: subject.name,
                     subjectCode: subject.code,
                     classId: subject.classId,
-                    className: subject.className ?? 'CMPN-C',
+                    className: subject.className ?? 'CMPN-A',
                     teacherId: _authService.currentProfile?.id ?? '44444444-4444-4444-4444-444444444401',
-                    teacherName: _authService.currentProfile?.name ?? 'Prof. Sharma',
+                    teacherName: _authService.currentProfile?.name ?? 'Teacher',
                     classroomId: room.id,
                     classroomName: room.name,
                     gatewayId: room.gatewayId,
@@ -164,6 +274,11 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
       appBar: AppBar(
         title: const Text('Faculty Attendance Portal'),
         actions: [
+          IconButton(
+            tooltip: 'Add Subject & Classroom',
+            icon: const Icon(Icons.add_circle_outline),
+            onPressed: _showAddSubjectDialog,
+          ),
           IconButton(
             tooltip: 'Hardware Diagnostics',
             icon: const Icon(Icons.developer_mode),
@@ -214,13 +329,13 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  profile?.name ?? 'Prof. Sharma',
+                                  profile?.name ?? 'Teacher',
                                   style: theme.textTheme.titleMedium?.copyWith(
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
                                 Text(
-                                  profile?.email ?? 'teacher@college.edu',
+                                  profile?.email ?? 'teacher@institution.edu',
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     color: theme.colorScheme.onSurfaceVariant,
                                   ),
@@ -250,12 +365,54 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                     _buildRealtimeAttendeeList(context),
                   ] else ...[
                     // "TODAY'S CLASSES" SECTION
-                    Text(
-                      "Today's Assigned Subjects",
-                      style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          "Today's Assigned Subjects",
+                          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                        ),
+                        TextButton.icon(
+                          onPressed: _showAddSubjectDialog,
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('Add Subject'),
+                        ),
+                      ],
                     ),
                     const SizedBox(height: 10),
-                    ..._subjects.map((subject) => _buildSubjectCard(context, subject)),
+                    if (_subjects.isEmpty)
+                      Card(
+                        elevation: 0,
+                        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
+                          child: Column(
+                            children: [
+                              Icon(Icons.library_books_outlined, size: 48, color: theme.colorScheme.primary),
+                              const SizedBox(height: 14),
+                              Text(
+                                'No Subjects Configured',
+                                style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                'Create a subject and assign it to a classroom to start taking live BLE attendance sessions.',
+                                textAlign: TextAlign.center,
+                                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                              ),
+                              const SizedBox(height: 20),
+                              FilledButton.icon(
+                                onPressed: _showAddSubjectDialog,
+                                icon: const Icon(Icons.add),
+                                label: const Text('Add Subject & Classroom'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      ..._subjects.map((subject) => _buildSubjectCard(context, subject)),
                   ],
                 ],
               ),
@@ -307,7 +464,11 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
               children: [
                 Icon(Icons.location_on_outlined, size: 16, color: theme.colorScheme.primary),
                 const SizedBox(width: 4),
-                const Text('Room 405 (ESP32_GATEWAY_405)'),
+                Text(
+                  _classrooms.isNotEmpty
+                      ? '${_classrooms.first.name} (${_classrooms.first.gatewayId ?? "ESP32"})'
+                      : 'Classroom: Dynamic Selection',
+                ),
               ],
             ),
             const SizedBox(height: 16),
@@ -387,10 +548,10 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
           ),
           const SizedBox(height: 12),
           Text(
-            '${session.subjectName ?? "DBMS"} (${session.subjectCode ?? "DBMS"})',
+            '${session.subjectName ?? "Active Lecture"}${session.subjectCode != null ? " (${session.subjectCode})" : ""}',
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
-          Text('Class: ${session.className ?? "CMPN-C"} | ${session.classroomName ?? "Room 405"}'),
+          Text('Class: ${session.className ?? "Standard"} | ${session.classroomName ?? "Classroom"}'),
           const SizedBox(height: 16),
 
           // Realtime count
