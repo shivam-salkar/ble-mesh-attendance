@@ -68,7 +68,7 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
         if (!mounted) return;
         AttendanceRecord? existing;
         if (session != null) {
-          final studentId = _authService.currentProfile?.id ?? (_studentProfile?.studentId ?? 'student-1');
+          final studentId = _authService.currentProfile?.id ?? 'c74da711-97f9-4387-a5cd-a7428bbc6491';
           existing = await _attendanceService.checkExistingAttendance(session.id, studentId);
         }
         if (mounted) {
@@ -151,7 +151,7 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
     final studentName = user?.name ?? (_studentProfile?.name ?? 'Student');
     final rollNumber = user?.rollNumber ?? (_studentProfile?.studentId ?? 'N/A');
     final macAddress = _studentProfile?.macAddress ?? '';
-    final studentId = user?.id ?? (_studentProfile?.studentId ?? 'student-1');
+    final studentId = user?.id ?? 'c74da711-97f9-4387-a5cd-a7428bbc6491';
 
     try {
       // 1. BLE Gateway transmission with adequate timeout for connect + write + ACK

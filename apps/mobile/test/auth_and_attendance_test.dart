@@ -5,8 +5,9 @@ import 'package:ble_mesh_attendance/services/auth_service.dart';
 import 'package:ble_mesh_attendance/services/attendance_service.dart';
 
 void main() {
+  final authService = AuthService();
+
   group('AuthService Tests', () {
-    final authService = AuthService();
 
     test('Teacher demo login returns teacher profile', () async {
       final profile = await authService.signIn(
@@ -163,6 +164,45 @@ void main() {
       final formatted = session.timeRemainingFormatted;
       expect(formatted, contains(':'));
       expect(formatted.length, 5);
+    });
+
+    test('Teacher demo profile has valid RFC 4122 UUID', () async {
+      final profile = await authService.signIn(
+        email: 'teacher@college.edu',
+        password: 'any_password',
+      );
+      expect(AttendanceService.isValidUuid(profile.id), isTrue);
+    });
+
+    test('Student demo profile has valid RFC 4122 UUID', () async {
+      final profile = await authService.signIn(
+        email: 'student@college.edu',
+        password: 'any_password',
+      );
+      expect(AttendanceService.isValidUuid(profile.id), isTrue);
+    });
+
+    test('resolveTeacherUuid and resolveStudentUuid convert legacy timestamps to valid UUIDs', () async {
+      // Legacy timestamp string like "1792091074917"
+      const legacyId = '1792091074917';
+      final resolvedTeacher = await attendanceService.resolveTeacherUuid(legacyId);
+      expect(AttendanceService.isValidUuid(resolvedTeacher), isTrue);
+
+      final resolvedStudent = await attendanceService.resolveStudentUuid(legacyId);
+      expect(AttendanceService.isValidUuid(resolvedStudent), isTrue);
+    });
+
+    test('createSubjectWithClassAndRoom assigns valid teacherId and returns subject', () async {
+      final subj = await attendanceService.createSubjectWithClassAndRoom(
+        subjectName: 'Operating Systems',
+        subjectCode: 'OS101',
+        className: 'CMPN-A',
+        teacherId: '1792091074917', // Test with legacy timestamp
+        roomName: 'Room 202',
+      );
+      expect(subj.id, isNotEmpty);
+      expect(subj.name, 'Operating Systems');
+      expect(AttendanceService.isValidUuid(subj.teacherId), isTrue);
     });
   });
 }

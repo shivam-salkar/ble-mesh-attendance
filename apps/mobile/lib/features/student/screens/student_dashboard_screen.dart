@@ -66,13 +66,13 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
   }
 
   Future<void> _loadRooms() async {
-    final studentId = _authService.currentProfile?.id ?? (_studentProfile?.studentId ?? 'student-1');
+    final studentId = _authService.currentProfile?.id ?? 'c74da711-97f9-4387-a5cd-a7428bbc6491';
     final rooms = await _attendanceService.fetchStudentJoinedRooms(studentId);
     if (mounted) setState(() => _joinedRooms = rooms);
   }
 
   Future<void> _loadHistory() async {
-    final studentId = _authService.currentProfile?.id ?? (_studentProfile?.studentId ?? 'student-1');
+    final studentId = _authService.currentProfile?.id ?? 'c74da711-97f9-4387-a5cd-a7428bbc6491';
     final history = await _attendanceService.fetchStudentHistory(studentId);
     if (mounted) setState(() => _history = history);
   }
@@ -89,7 +89,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
       _joinError = null;
     });
 
-    final studentId = _authService.currentProfile?.id ?? (_studentProfile?.studentId ?? 'student-1');
+    final studentId = _authService.currentProfile?.id ?? 'c74da711-97f9-4387-a5cd-a7428bbc6491';
 
     try {
       final joinedSubject = await _attendanceService.joinRoomByCode(

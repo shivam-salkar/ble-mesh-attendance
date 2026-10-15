@@ -53,7 +53,7 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
-    final teacherId = _authService.currentProfile?.id ?? '44444444-4444-4444-4444-444444444401';
+    final teacherId = _authService.currentProfile?.id ?? 'cec26a0c-1c06-4755-8625-9b3dbe266746';
     final subjects = await _attendanceService.fetchTeacherSubjects(teacherId);
     final classrooms = await _attendanceService.fetchClassrooms();
     await _attendanceService.fetchActiveSessionForTeacher(teacherId);
@@ -314,7 +314,7 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                 Navigator.of(ctx).pop();
                 setState(() => _isLoading = true);
                 try {
-                  final teacherId = _authService.currentProfile?.id ?? '44444444-4444-4444-4444-444444444401';
+                  final teacherId = _authService.currentProfile?.id ?? 'cec26a0c-1c06-4755-8625-9b3dbe266746';
                   final created = await _attendanceService.createSubjectWithClassAndRoom(
                     subjectName: nameCtrl.text.trim(),
                     subjectCode: codeCtrl.text.trim(),
@@ -459,7 +459,7 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                     subjectCode: subject.code,
                     classId: subject.classId,
                     className: subject.className ?? 'CMPN-A',
-                    teacherId: _authService.currentProfile?.id ?? '44444444-4444-4444-4444-444444444401',
+                    teacherId: _authService.currentProfile?.id ?? 'cec26a0c-1c06-4755-8625-9b3dbe266746',
                     teacherName: _authService.currentProfile?.name ?? 'Teacher',
                     classroomId: room.id,
                     classroomName: room.name,

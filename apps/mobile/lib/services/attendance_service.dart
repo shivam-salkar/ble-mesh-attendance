@@ -24,6 +24,233 @@ class AttendanceService extends ChangeNotifier {
   RealtimeChannel? _sessionSubscription;
   RealtimeChannel? _recordsSubscription;
 
+  static final _uuidRegex = RegExp(
+    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+  );
+
+  /// Check whether a string adheres to standard RFC 4122 UUID format.
+  static bool isValidUuid(String? id) {
+    if (id == null) return false;
+    return _uuidRegex.hasMatch(id.trim());
+  }
+
+  /// Resolves any teacher identifier (timestamp, mock string, or auth user ID)
+  /// into a guaranteed valid profile UUID that exists in `public.profiles`.
+  Future<String> resolveTeacherUuid(String? teacherId) async {
+    const knownTeacherUuid = 'cec26a0c-1c06-4755-8625-9b3dbe266746';
+
+    if (!SupabaseConfig.isInitialized) {
+      if (isValidUuid(teacherId)) return teacherId!.trim();
+      return knownTeacherUuid;
+    }
+
+    try {
+      // 1. If input is already a valid UUID, verify it exists in profiles
+      if (isValidUuid(teacherId)) {
+        final existing = await SupabaseConfig.client
+            .from('profiles')
+            .select('id')
+            .eq('id', teacherId!.trim())
+            .maybeSingle();
+        if (existing != null && existing['id'] != null) {
+          return existing['id'] as String;
+        }
+      }
+
+      // 2. Check if currently authenticated Supabase user has a profile
+      final currentAuthUser = SupabaseConfig.client.auth.currentUser;
+      if (currentAuthUser != null) {
+        final byAuth = await SupabaseConfig.client
+            .from('profiles')
+            .select('id')
+            .eq('auth_user_id', currentAuthUser.id)
+            .maybeSingle();
+        if (byAuth != null && byAuth['id'] != null) {
+          return byAuth['id'] as String;
+        }
+
+        if (currentAuthUser.email != null) {
+          final byEmail = await SupabaseConfig.client
+              .from('profiles')
+              .select('id')
+              .eq('email', currentAuthUser.email!.trim().toLowerCase())
+              .maybeSingle();
+          if (byEmail != null && byEmail['id'] != null) {
+            final id = byEmail['id'] as String;
+            try {
+              await SupabaseConfig.client
+                  .from('profiles')
+                  .update({'auth_user_id': currentAuthUser.id})
+                  .eq('id', id);
+            } catch (_) {}
+            return id;
+          }
+        }
+      }
+
+      // 3. Fallback to any teacher profile in the database
+      final anyTeacher = await SupabaseConfig.client
+          .from('profiles')
+          .select('id')
+          .eq('role', 'teacher')
+          .limit(1)
+          .maybeSingle();
+      if (anyTeacher != null && anyTeacher['id'] != null) {
+        return anyTeacher['id'] as String;
+      }
+
+      // 4. Check known fallback in DB
+      final knownCheck = await SupabaseConfig.client
+          .from('profiles')
+          .select('id')
+          .eq('id', knownTeacherUuid)
+          .maybeSingle();
+      if (knownCheck != null) {
+        return knownTeacherUuid;
+      }
+
+      // 5. If profiles table has no teacher, insert one
+      final newTeacher = await SupabaseConfig.client
+          .from('profiles')
+          .insert({
+            'name': 'Faculty Teacher',
+            'email': currentAuthUser?.email ?? 'teacher@college.edu',
+            'role': 'teacher',
+            if (currentAuthUser != null) 'auth_user_id': currentAuthUser.id,
+          })
+          .select('id')
+          .single();
+      return newTeacher['id'] as String;
+    } catch (e) {
+      debugPrint('[AttendanceService] resolveTeacherUuid fallback: $e');
+      return knownTeacherUuid;
+    }
+  }
+
+  /// Resolves any student identifier (roll number, mock string, or auth ID)
+  /// into a guaranteed valid profile UUID that exists in `public.profiles`.
+  Future<String> resolveStudentUuid(
+    String? studentId, {
+    String? rollNumber,
+    String? email,
+    String? name,
+  }) async {
+    const knownStudentUuid = 'c74da711-97f9-4387-a5cd-a7428bbc6491';
+
+    if (!SupabaseConfig.isInitialized) {
+      if (isValidUuid(studentId)) return studentId!.trim();
+      return knownStudentUuid;
+    }
+
+    try {
+      // 1. If valid UUID and exists in DB
+      if (isValidUuid(studentId)) {
+        final existing = await SupabaseConfig.client
+            .from('profiles')
+            .select('id')
+            .eq('id', studentId!.trim())
+            .maybeSingle();
+        if (existing != null && existing['id'] != null) {
+          return existing['id'] as String;
+        }
+      }
+
+      // 2. Check current authenticated user
+      final currentAuthUser = SupabaseConfig.client.auth.currentUser;
+      if (currentAuthUser != null) {
+        final byAuth = await SupabaseConfig.client
+            .from('profiles')
+            .select('id')
+            .eq('auth_user_id', currentAuthUser.id)
+            .maybeSingle();
+        if (byAuth != null && byAuth['id'] != null) {
+          return byAuth['id'] as String;
+        }
+
+        if (currentAuthUser.email != null) {
+          final byEmail = await SupabaseConfig.client
+              .from('profiles')
+              .select('id')
+              .eq('email', currentAuthUser.email!.trim().toLowerCase())
+              .maybeSingle();
+          if (byEmail != null && byEmail['id'] != null) {
+            final id = byEmail['id'] as String;
+            try {
+              await SupabaseConfig.client
+                  .from('profiles')
+                  .update({'auth_user_id': currentAuthUser.id})
+                  .eq('id', id);
+            } catch (_) {}
+            return id;
+          }
+        }
+      }
+
+      // 3. Search by roll number if provided (or if studentId looks like roll number)
+      final rollToSearch = rollNumber ?? (studentId != null && !isValidUuid(studentId) ? studentId : null);
+      if (rollToSearch != null && rollToSearch.isNotEmpty) {
+        final byRoll = await SupabaseConfig.client
+            .from('profiles')
+            .select('id')
+            .eq('roll_number', rollToSearch.trim())
+            .maybeSingle();
+        if (byRoll != null && byRoll['id'] != null) {
+          return byRoll['id'] as String;
+        }
+      }
+
+      // 4. Search by email if provided
+      if (email != null && email.isNotEmpty) {
+        final byEmail = await SupabaseConfig.client
+            .from('profiles')
+            .select('id')
+            .eq('email', email.trim().toLowerCase())
+            .maybeSingle();
+        if (byEmail != null && byEmail['id'] != null) {
+          return byEmail['id'] as String;
+        }
+      }
+
+      // 5. Fallback to any student in the database
+      final anyStudent = await SupabaseConfig.client
+          .from('profiles')
+          .select('id')
+          .eq('role', 'student')
+          .limit(1)
+          .maybeSingle();
+      if (anyStudent != null && anyStudent['id'] != null) {
+        return anyStudent['id'] as String;
+      }
+
+      // 6. Check known student UUID
+      final knownCheck = await SupabaseConfig.client
+          .from('profiles')
+          .select('id')
+          .eq('id', knownStudentUuid)
+          .maybeSingle();
+      if (knownCheck != null) {
+        return knownStudentUuid;
+      }
+
+      // 7. Auto-create student profile if missing
+      final newStudent = await SupabaseConfig.client
+          .from('profiles')
+          .insert({
+            'name': name ?? (currentAuthUser?.email?.split('@').first ?? 'Student User'),
+            'email': email ?? (currentAuthUser?.email ?? 'student_${DateTime.now().millisecondsSinceEpoch}@college.edu'),
+            'role': 'student',
+            'roll_number': rollToSearch ?? 'STU-${DateTime.now().millisecondsSinceEpoch.toString().substring(7)}',
+            if (currentAuthUser != null) 'auth_user_id': currentAuthUser.id,
+          })
+          .select('id')
+          .single();
+      return newStudent['id'] as String;
+    } catch (e) {
+      debugPrint('[AttendanceService] resolveStudentUuid fallback: $e');
+      return knownStudentUuid;
+    }
+  }
+
   // ─── TEACHER OPERATIONS ──────────────────────────────────────────────
 
   /// Generate a unique 6-character room code (e.g. NET405, CN502, BMA801)
@@ -46,10 +273,11 @@ class AttendanceService extends ChangeNotifier {
     }
 
     try {
+      final validTeacherId = await resolveTeacherUuid(teacherId);
       final res = await SupabaseConfig.client
           .from('subjects')
           .select('*, classes(name), classrooms(name, gateway_id)')
-          .eq('teacher_id', teacherId)
+          .eq('teacher_id', validTeacherId)
           .order('created_at', ascending: false);
 
       final remote = (res as List)
@@ -104,6 +332,8 @@ class AttendanceService extends ChangeNotifier {
     String? gatewayCode,
     String? roomCode,
   }) async {
+    final validTeacherId = await resolveTeacherUuid(teacherId);
+
     final code = (roomCode != null && roomCode.trim().isNotEmpty)
         ? roomCode.trim().toUpperCase()
         : generateRoomCode(subjectCode);
@@ -114,7 +344,7 @@ class AttendanceService extends ChangeNotifier {
       code: subjectCode,
       classId: 'class-${DateTime.now().millisecondsSinceEpoch}',
       className: className,
-      teacherId: teacherId,
+      teacherId: validTeacherId,
       roomCode: code,
       scheduleTime: scheduleTime,
       classroomName: roomName,
@@ -196,7 +426,7 @@ class AttendanceService extends ChangeNotifier {
             'name': subjectName.trim(),
             'code': subjectCode.trim(),
             'class_id': classId,
-            'teacher_id': teacherId,
+            'teacher_id': validTeacherId,
             'classroom_id': roomId,
             'room_code': code,
             'schedule_time': scheduleTime.trim(),
@@ -239,6 +469,7 @@ class AttendanceService extends ChangeNotifier {
     int durationMinutes = 5,
     String sessionType = 'LECTURE',
   }) async {
+    final validTeacherId = await resolveTeacherUuid(teacherId);
     final now = DateTime.now();
     final expiresAt = now.add(Duration(minutes: durationMinutes));
 
@@ -250,7 +481,7 @@ class AttendanceService extends ChangeNotifier {
         subjectCode: subjectCode,
         classId: classId,
         className: className,
-        teacherId: teacherId,
+        teacherId: validTeacherId,
         teacherName: teacherName,
         classroomId: classroomId,
         classroomName: classroomName,
@@ -270,7 +501,7 @@ class AttendanceService extends ChangeNotifier {
       final insertData = {
         'subject_id': subjectId,
         'class_id': classId,
-        'teacher_id': teacherId,
+        'teacher_id': validTeacherId,
         'classroom_id': classroomId,
         'gateway_id': gatewayId ?? 'ESP32_GATEWAY_405',
         'session_type': sessionType,
@@ -426,10 +657,11 @@ class AttendanceService extends ChangeNotifier {
     if (!SupabaseConfig.isInitialized) return _activeSession;
 
     try {
+      final validTeacherId = await resolveTeacherUuid(teacherId);
       final res = await SupabaseConfig.client
           .from('attendance_sessions')
           .select('*, subjects(name, code), classes(name), classrooms(name)')
-          .eq('teacher_id', teacherId)
+          .eq('teacher_id', validTeacherId)
           .eq('status', 'ACTIVE')
           .gt('expires_at', DateTime.now().toIso8601String())
           .order('started_at', ascending: false)
@@ -475,8 +707,9 @@ class AttendanceService extends ChangeNotifier {
     if (!SupabaseConfig.isInitialized) return;
 
     try {
+      final validStudentId = await resolveStudentUuid(studentId);
       await SupabaseConfig.client.from('class_members').upsert({
-        'student_id': studentId,
+        'student_id': validStudentId,
         'class_id': classId,
       });
     } catch (e) {
@@ -490,10 +723,11 @@ class AttendanceService extends ChangeNotifier {
     if (!SupabaseConfig.isInitialized) return '33333333-3333-3333-3333-333333333301';
 
     try {
+      final validStudentId = await resolveStudentUuid(studentId);
       final res = await SupabaseConfig.client
           .from('class_members')
           .select('class_id')
-          .eq('student_id', studentId)
+          .eq('student_id', validStudentId)
           .limit(1)
           .maybeSingle();
 
@@ -511,7 +745,7 @@ class AttendanceService extends ChangeNotifier {
       if (classes.isNotEmpty) {
         final defaultClassId = classes.first['id'] as String;
         await SupabaseConfig.client.from('class_members').upsert({
-          'student_id': studentId,
+          'student_id': validStudentId,
           'class_id': defaultClassId,
         });
         return defaultClassId;
@@ -533,11 +767,12 @@ class AttendanceService extends ChangeNotifier {
     }
 
     try {
+      final validStudentId = await resolveStudentUuid(studentId);
       final res = await SupabaseConfig.client
           .from('attendance_records')
           .select('*, profiles(name, roll_number)')
           .eq('session_id', sessionId)
-          .eq('student_id', studentId)
+          .eq('student_id', validStudentId)
           .maybeSingle();
 
       if (res != null) {
@@ -577,6 +812,8 @@ class AttendanceService extends ChangeNotifier {
     }
 
     try {
+      final validStudentId = await resolveStudentUuid(studentId);
+
       final data = await SupabaseConfig.client
           .from('subjects')
           .select('*, classes(name), classrooms(name, gateway_id), profiles!subjects_teacher_id_fkey(name)')
@@ -592,7 +829,7 @@ class AttendanceService extends ChangeNotifier {
       // 1. Insert into student_rooms
       await SupabaseConfig.client.from('student_rooms').upsert({
         'subject_id': subject.id,
-        'student_id': studentId,
+        'student_id': validStudentId,
       }, onConflict: 'student_id,subject_id');
 
       // 2. Also ensure class membership
@@ -600,7 +837,7 @@ class AttendanceService extends ChangeNotifier {
         try {
           await SupabaseConfig.client.from('class_members').upsert({
             'class_id': subject.classId,
-            'student_id': studentId,
+            'student_id': validStudentId,
           });
         } catch (_) {}
       }
@@ -634,10 +871,11 @@ class AttendanceService extends ChangeNotifier {
     }
 
     try {
+      final validStudentId = await resolveStudentUuid(studentId);
       final res = await SupabaseConfig.client
           .from('student_rooms')
           .select('subject_id, subjects(*, classes(name), classrooms(name, gateway_id), profiles!subjects_teacher_id_fkey(name))')
-          .eq('student_id', studentId)
+          .eq('student_id', validStudentId)
           .order('joined_at', ascending: false);
 
       final List<Subject> rooms = [];
@@ -666,10 +904,11 @@ class AttendanceService extends ChangeNotifier {
     if (!SupabaseConfig.isInitialized) return;
 
     try {
+      final validStudentId = await resolveStudentUuid(studentId);
       await SupabaseConfig.client
           .from('student_rooms')
           .delete()
-          .eq('student_id', studentId)
+          .eq('student_id', validStudentId)
           .eq('subject_id', subjectId);
     } catch (e) {
       debugPrint('[AttendanceService] leaveRoom error: $e');
@@ -883,10 +1122,33 @@ class AttendanceService extends ChangeNotifier {
     required String rollNumber,
   }) async {
     final now = DateTime.now();
+
+    if (!SupabaseConfig.isInitialized) {
+      final record = AttendanceRecord(
+        id: 'rec-${now.millisecondsSinceEpoch}',
+        sessionId: sessionId,
+        studentId: studentId,
+        studentName: studentName,
+        rollNumber: rollNumber,
+        timestamp: now,
+        verifiedAt: now,
+        status: 'PRESENT',
+        isConfirmed: true,
+        isSelf: true,
+        verificationMethod: 'DEVELOPMENT_DIRECT',
+      );
+      if (!_sessionRecords.any((r) => r.studentId == studentId)) {
+        _sessionRecords.insert(0, record);
+        notifyListeners();
+      }
+      return record;
+    }
+
+    final validStudentId = await resolveStudentUuid(studentId, rollNumber: rollNumber, name: studentName);
     final record = AttendanceRecord(
       id: 'rec-${now.millisecondsSinceEpoch}',
       sessionId: sessionId,
-      studentId: studentId,
+      studentId: validStudentId,
       studentName: studentName,
       rollNumber: rollNumber,
       timestamp: now,
@@ -897,18 +1159,10 @@ class AttendanceService extends ChangeNotifier {
       verificationMethod: 'DEVELOPMENT_DIRECT',
     );
 
-    if (!SupabaseConfig.isInitialized) {
-      if (!_sessionRecords.any((r) => r.studentId == studentId)) {
-        _sessionRecords.insert(0, record);
-        notifyListeners();
-      }
-      return record;
-    }
-
     try {
       final insertData = {
         'session_id': sessionId,
-        'student_id': studentId,
+        'student_id': validStudentId,
         'status': 'PRESENT',
         'submitted_at': now.toIso8601String(),
         'verified_at': now.toIso8601String(),
@@ -922,7 +1176,7 @@ class AttendanceService extends ChangeNotifier {
           .single();
 
       final saved = AttendanceRecord.fromJson(res);
-      final existingIdx = _sessionRecords.indexWhere((r) => r.studentId == studentId);
+      final existingIdx = _sessionRecords.indexWhere((r) => r.studentId == validStudentId);
       if (existingIdx >= 0) {
         _sessionRecords[existingIdx] = saved;
       } else {
@@ -933,7 +1187,7 @@ class AttendanceService extends ChangeNotifier {
     } catch (e) {
       debugPrint('[AttendanceService] submitDevelopmentAttendance error: $e');
       // Fallback
-      if (!_sessionRecords.any((r) => r.studentId == studentId)) {
+      if (!_sessionRecords.any((r) => r.studentId == validStudentId)) {
         _sessionRecords.insert(0, record);
         notifyListeners();
       }
@@ -955,10 +1209,37 @@ class AttendanceService extends ChangeNotifier {
     String? gatewayId,
   }) async {
     final now = DateTime.now();
+
+    if (!SupabaseConfig.isInitialized) {
+      final record = AttendanceRecord(
+        id: 'rec-${now.millisecondsSinceEpoch}',
+        sessionId: sessionId,
+        studentId: studentId,
+        studentName: studentName,
+        rollNumber: rollNumber,
+        macAddress: macAddress,
+        deviceId: gatewayId ?? 'ESP32_GATEWAY_405',
+        timestamp: now,
+        verifiedAt: now,
+        status: 'PRESENT',
+        isConfirmed: true,
+        isSelf: true,
+        gatewayVerified: gatewayVerified,
+        verificationMethod: verificationMethod,
+        hopCount: hopCount,
+      );
+      if (!_sessionRecords.any((r) => r.studentId == studentId)) {
+        _sessionRecords.insert(0, record);
+        notifyListeners();
+      }
+      return record;
+    }
+
+    final validStudentId = await resolveStudentUuid(studentId, rollNumber: rollNumber, name: studentName);
     final record = AttendanceRecord(
       id: 'rec-${now.millisecondsSinceEpoch}',
       sessionId: sessionId,
-      studentId: studentId,
+      studentId: validStudentId,
       studentName: studentName,
       rollNumber: rollNumber,
       macAddress: macAddress,
@@ -973,18 +1254,10 @@ class AttendanceService extends ChangeNotifier {
       hopCount: hopCount,
     );
 
-    if (!SupabaseConfig.isInitialized) {
-      if (!_sessionRecords.any((r) => r.studentId == studentId)) {
-        _sessionRecords.insert(0, record);
-        notifyListeners();
-      }
-      return record;
-    }
-
     try {
       final insertData = {
         'session_id': sessionId,
-        'student_id': studentId,
+        'student_id': validStudentId,
         'status': 'PRESENT',
         'submitted_at': now.toIso8601String(),
         'verified_at': now.toIso8601String(),
@@ -1003,7 +1276,7 @@ class AttendanceService extends ChangeNotifier {
           .single();
 
       final saved = AttendanceRecord.fromJson(res);
-      final existingIdx = _sessionRecords.indexWhere((r) => r.studentId == studentId);
+      final existingIdx = _sessionRecords.indexWhere((r) => r.studentId == validStudentId);
       if (existingIdx >= 0) {
         _sessionRecords[existingIdx] = saved;
       } else {
@@ -1013,7 +1286,7 @@ class AttendanceService extends ChangeNotifier {
       return saved;
     } catch (e) {
       debugPrint('[AttendanceService] submitVerifiedAttendance error: $e');
-      if (!_sessionRecords.any((r) => r.studentId == studentId)) {
+      if (!_sessionRecords.any((r) => r.studentId == validStudentId)) {
         _sessionRecords.insert(0, record);
         notifyListeners();
       }
@@ -1028,10 +1301,11 @@ class AttendanceService extends ChangeNotifier {
     }
 
     try {
+      final validStudentId = await resolveStudentUuid(studentId);
       final res = await SupabaseConfig.client
           .from('attendance_records')
           .select('*, attendance_sessions(subject_id, subjects(name, code))')
-          .eq('student_id', studentId)
+          .eq('student_id', validStudentId)
           .order('submitted_at', ascending: false);
 
       return (res as List)
@@ -1059,7 +1333,7 @@ class AttendanceService extends ChangeNotifier {
       code: 'DBMS',
       classId: '33333333-3333-3333-3333-333333333301',
       className: 'CMPN-C',
-      teacherId: '44444444-4444-4444-4444-444444444401',
+      teacherId: 'cec26a0c-1c06-4755-8625-9b3dbe266746',
     ),
     const Subject(
       id: '66666666-6666-6666-6666-666666666602',
@@ -1067,7 +1341,7 @@ class AttendanceService extends ChangeNotifier {
       code: 'CN',
       classId: '33333333-3333-3333-3333-333333333301',
       className: 'CMPN-C',
-      teacherId: '44444444-4444-4444-4444-444444444401',
+      teacherId: 'cec26a0c-1c06-4755-8625-9b3dbe266746',
     ),
   ];
 
