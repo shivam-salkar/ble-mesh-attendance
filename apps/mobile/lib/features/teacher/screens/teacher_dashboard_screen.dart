@@ -328,11 +328,27 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                   await _loadData();
                   if (mounted) {
                     _showRoomCreatedDialog(created);
+                    if (created.id.startsWith('subj-')) {
+                      ScaffoldMessenger.of(this.context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Room created in Offline Mode. Attendance can be taken via ESP32 Gateway!'),
+                          backgroundColor: Colors.orange,
+                          duration: Duration(seconds: 4),
+                        ),
+                      );
+                    }
                   }
                 } catch (e) {
                   if (mounted) {
+                    final errStr = e.toString();
+                    String msg = 'Failed to add subject: $e';
+                    if (errStr.contains('SocketException') ||
+                        errStr.contains('Failed host lookup') ||
+                        errStr.contains('errno = 7')) {
+                      msg = 'No internet connection: Please ensure your device has internet access.';
+                    }
                     ScaffoldMessenger.of(this.context).showSnackBar(
-                      SnackBar(content: Text('Failed to add subject: $e'), backgroundColor: Colors.red),
+                      SnackBar(content: Text(msg), backgroundColor: Colors.red),
                     );
                   }
                 } finally {

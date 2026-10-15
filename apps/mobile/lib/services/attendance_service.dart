@@ -19,6 +19,8 @@ class AttendanceService extends ChangeNotifier {
   final List<AttendanceRecord> _sessionRecords = [];
   List<AttendanceRecord> get sessionRecords => List.unmodifiable(_sessionRecords);
 
+  final Set<String> _studentJoinedRoomIds = {};
+
   RealtimeChannel? _sessionSubscription;
   RealtimeChannel? _recordsSubscription;
 
@@ -50,12 +52,20 @@ class AttendanceService extends ChangeNotifier {
           .eq('teacher_id', teacherId)
           .order('created_at', ascending: false);
 
-      return (res as List)
+      final remote = (res as List)
           .map((item) => Subject.fromJson(item as Map<String, dynamic>))
           .toList();
+
+      final combined = <Subject>[...remote];
+      for (final ms in _mockSubjects) {
+        if (!combined.any((s) => s.id == ms.id || s.roomCode == ms.roomCode)) {
+          combined.add(ms);
+        }
+      }
+      return combined;
     } catch (e) {
       debugPrint('[AttendanceService] fetchTeacherSubjects error: $e');
-      return [];
+      return _mockSubjects;
     }
   }
 
@@ -76,7 +86,7 @@ class AttendanceService extends ChangeNotifier {
           .toList();
     } catch (e) {
       debugPrint('[AttendanceService] fetchClassrooms error: $e');
-      return [];
+      return _mockClassrooms;
     }
   }
 
@@ -98,20 +108,22 @@ class AttendanceService extends ChangeNotifier {
         ? roomCode.trim().toUpperCase()
         : generateRoomCode(subjectCode);
 
+    final offlineSubj = Subject(
+      id: 'subj-${DateTime.now().millisecondsSinceEpoch}',
+      name: subjectName,
+      code: subjectCode,
+      classId: 'class-${DateTime.now().millisecondsSinceEpoch}',
+      className: className,
+      teacherId: teacherId,
+      roomCode: code,
+      scheduleTime: scheduleTime,
+      classroomName: roomName,
+      gatewayId: gatewayCode ?? 'ESP32_${roomName.trim().replaceAll(' ', '_').toUpperCase()}',
+    );
+
     if (!SupabaseConfig.isInitialized) {
-      final mock = Subject(
-        id: 'subj-${DateTime.now().millisecondsSinceEpoch}',
-        name: subjectName,
-        code: subjectCode,
-        classId: 'class-${DateTime.now().millisecondsSinceEpoch}',
-        className: className,
-        teacherId: teacherId,
-        roomCode: code,
-        scheduleTime: scheduleTime,
-        classroomName: roomName,
-        gatewayId: gatewayCode ?? 'BMA-Gateway-01',
-      );
-      return mock;
+      _mockSubjects.insert(0, offlineSubj);
+      return offlineSubj;
     }
 
     try {
@@ -192,9 +204,22 @@ class AttendanceService extends ChangeNotifier {
           .select('*, classes(name), classrooms(name, gateway_id)')
           .single();
 
-      return Subject.fromJson(insertedSubj);
+      final created = Subject.fromJson(insertedSubj);
+      _mockSubjects.insert(0, created);
+      return created;
     } catch (e) {
       debugPrint('[AttendanceService] createSubjectWithClassAndRoom error: $e');
+      final isNetworkError = e.toString().contains('SocketException') ||
+          e.toString().contains('Failed host lookup') ||
+          e.toString().contains('ClientException') ||
+          e.toString().contains('Network is unreachable') ||
+          e.toString().contains('errno = 7');
+
+      if (isNetworkError) {
+        debugPrint('[AttendanceService] Network unreachable: returning local offline subject with code: $code');
+        _mockSubjects.insert(0, offlineSubj);
+        return offlineSubj;
+      }
       rethrow;
     }
   }
@@ -583,6 +608,21 @@ class AttendanceService extends ChangeNotifier {
       return subject;
     } catch (e) {
       debugPrint('[AttendanceService] joinRoomByCode error: $e');
+      final isNetworkError = e.toString().contains('SocketException') ||
+          e.toString().contains('Failed host lookup') ||
+          e.toString().contains('ClientException') ||
+          e.toString().contains('Network is unreachable') ||
+          e.toString().contains('errno = 7');
+
+      if (isNetworkError) {
+        final local = _mockSubjects.where((s) => s.roomCode == cleanCode || s.code == cleanCode).firstOrNull;
+        if (local != null) {
+          if (!_studentJoinedRoomIds.contains(local.id)) {
+            _studentJoinedRoomIds.add(local.id);
+          }
+          return local;
+        }
+      }
       rethrow;
     }
   }
@@ -590,7 +630,7 @@ class AttendanceService extends ChangeNotifier {
   /// Fetch all rooms (subjects) joined by a student.
   Future<List<Subject>> fetchStudentJoinedRooms(String studentId) async {
     if (!SupabaseConfig.isInitialized) {
-      return [];
+      return _mockSubjects.where((s) => _studentJoinedRoomIds.contains(s.id)).toList();
     }
 
     try {
@@ -606,10 +646,15 @@ class AttendanceService extends ChangeNotifier {
           rooms.add(Subject.fromJson(item['subjects'] as Map<String, dynamic>));
         }
       }
+      for (final ms in _mockSubjects) {
+        if (_studentJoinedRoomIds.contains(ms.id) && !rooms.any((r) => r.id == ms.id)) {
+          rooms.add(ms);
+        }
+      }
       return rooms;
     } catch (e) {
       debugPrint('[AttendanceService] fetchStudentJoinedRooms error: $e');
-      return [];
+      return _mockSubjects.where((s) => _studentJoinedRoomIds.contains(s.id)).toList();
     }
   }
 
