@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../core/config/supabase_config.dart';
 import '../models/profile.dart';
+import 'student_profile_service.dart';
 
 class AuthService extends ChangeNotifier {
   static final AuthService _instance = AuthService._internal();
@@ -54,6 +55,12 @@ class AuthService extends ChangeNotifier {
       if (profile == null) throw Exception('User profile not found in database');
 
       _currentProfile = profile;
+      if (profile.isStudent) {
+        unawaited(StudentProfileService.saveProfile(
+          name: profile.name,
+          studentId: profile.rollNumber ?? '',
+        ));
+      }
       notifyListeners();
       return profile;
     } catch (e) {
@@ -105,12 +112,53 @@ class AuthService extends ChangeNotifier {
 
       final profile = UserProfile.fromJson(insertRes);
       _currentProfile = profile;
+      if (profile.isStudent) {
+        unawaited(StudentProfileService.saveProfile(
+          name: profile.name,
+          studentId: profile.rollNumber ?? '',
+        ));
+      }
       notifyListeners();
       return profile;
     } catch (e) {
       debugPrint('[AuthService] Supabase signUp failed: $e. Using local fallback.');
       return _createMockProfile(email, name, role, rollNumber);
     }
+  }
+
+  /// Update name & roll number for currently logged in user.
+  Future<UserProfile> updateProfileDetails({
+    required String name,
+    required String rollNumber,
+  }) async {
+    if (_currentProfile == null) throw Exception('No user logged in');
+
+    final updated = _currentProfile!.copyWith(
+      name: name.trim(),
+      rollNumber: rollNumber.trim(),
+    );
+
+    if (SupabaseConfig.isInitialized) {
+      try {
+        await SupabaseConfig.client
+            .from('profiles')
+            .update({
+              'name': name.trim(),
+              'roll_number': rollNumber.trim(),
+            })
+            .eq('id', _currentProfile!.id);
+      } catch (e) {
+        debugPrint('[AuthService] updateProfileDetails DB error: $e');
+      }
+    }
+
+    _currentProfile = updated;
+    await StudentProfileService.saveProfile(
+      name: name.trim(),
+      studentId: rollNumber.trim(),
+    );
+    notifyListeners();
+    return updated;
   }
 
   /// Fetch user profile from Supabase `profiles` table.

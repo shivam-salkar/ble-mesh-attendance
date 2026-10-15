@@ -64,6 +64,26 @@ class UserProfile {
     );
   }
 
+  UserProfile copyWith({
+    String? id,
+    String? authUserId,
+    String? name,
+    String? email,
+    String? rollNumber,
+    UserRole? role,
+    DateTime? createdAt,
+  }) {
+    return UserProfile(
+      id: id ?? this.id,
+      authUserId: authUserId ?? this.authUserId,
+      name: name ?? this.name,
+      email: email ?? this.email,
+      rollNumber: rollNumber ?? this.rollNumber,
+      role: role ?? this.role,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+
   Map<String, dynamic> toJson() {
     return {
       'id': id,

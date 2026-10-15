@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../core/config/supabase_config.dart';
@@ -23,7 +24,20 @@ class AttendanceService extends ChangeNotifier {
 
   // ─── TEACHER OPERATIONS ──────────────────────────────────────────────
 
-  /// Fetch subjects assigned to a teacher.
+  /// Generate a unique 6-character room code (e.g. NET405, CN502, BMA801)
+  static String generateRoomCode([String? prefix]) {
+    final cleanPrefix = (prefix != null && prefix.trim().isNotEmpty)
+        ? prefix.trim().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toUpperCase()
+        : 'RM';
+    final p = cleanPrefix.length > 3 ? cleanPrefix.substring(0, 3) : cleanPrefix;
+    final rand = Random();
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final needed = (6 - p.length) > 0 ? (6 - p.length) : 3;
+    final suffix = List.generate(needed, (_) => chars[rand.nextInt(chars.length)]).join();
+    return '$p$suffix'.toUpperCase();
+  }
+
+  /// Fetch subjects/rooms assigned to a teacher.
   Future<List<Subject>> fetchTeacherSubjects(String teacherId) async {
     if (!SupabaseConfig.isInitialized) {
       return _mockSubjects;
@@ -32,8 +46,9 @@ class AttendanceService extends ChangeNotifier {
     try {
       final res = await SupabaseConfig.client
           .from('subjects')
-          .select('*, classes(name)')
-          .eq('teacher_id', teacherId);
+          .select('*, classes(name), classrooms(name, gateway_id)')
+          .eq('teacher_id', teacherId)
+          .order('created_at', ascending: false);
 
       return (res as List)
           .map((item) => Subject.fromJson(item as Map<String, dynamic>))
@@ -65,7 +80,7 @@ class AttendanceService extends ChangeNotifier {
     }
   }
 
-  /// Create a new subject with associated class and classroom if they don't already exist.
+  /// Create a new room for a subject for a particular class at a particular time.
   Future<Subject> createSubjectWithClassAndRoom({
     required String subjectName,
     required String subjectCode,
@@ -75,8 +90,14 @@ class AttendanceService extends ChangeNotifier {
     int semester = 5,
     String roomName = 'Room 101',
     String building = 'Main Academic Block',
+    String scheduleTime = '10:00 AM - 11:00 AM',
     String? gatewayCode,
+    String? roomCode,
   }) async {
+    final code = (roomCode != null && roomCode.trim().isNotEmpty)
+        ? roomCode.trim().toUpperCase()
+        : generateRoomCode(subjectCode);
+
     if (!SupabaseConfig.isInitialized) {
       final mock = Subject(
         id: 'subj-${DateTime.now().millisecondsSinceEpoch}',
@@ -85,6 +106,10 @@ class AttendanceService extends ChangeNotifier {
         classId: 'class-${DateTime.now().millisecondsSinceEpoch}',
         className: className,
         teacherId: teacherId,
+        roomCode: code,
+        scheduleTime: scheduleTime,
+        classroomName: roomName,
+        gatewayId: gatewayCode ?? 'BMA-Gateway-01',
       );
       return mock;
     }
@@ -152,7 +177,7 @@ class AttendanceService extends ChangeNotifier {
         }, onConflict: 'gateway_code');
       } catch (_) {}
 
-      // 4. Create subject
+      // 4. Create subject with room_code, schedule_time, and classroom_id
       final insertedSubj = await SupabaseConfig.client
           .from('subjects')
           .insert({
@@ -160,8 +185,11 @@ class AttendanceService extends ChangeNotifier {
             'code': subjectCode.trim(),
             'class_id': classId,
             'teacher_id': teacherId,
+            'classroom_id': roomId,
+            'room_code': code,
+            'schedule_time': scheduleTime.trim(),
           })
-          .select('*, classes(name)')
+          .select('*, classes(name), classrooms(name, gateway_id)')
           .single();
 
       return Subject.fromJson(insertedSubj);
@@ -494,6 +522,221 @@ class AttendanceService extends ChangeNotifier {
       debugPrint('[AttendanceService] checkExistingAttendance error: $e');
     }
     return null;
+  }
+
+  /// Join a room/subject using its 6-character room code.
+  Future<Subject> joinRoomByCode({
+    required String studentId,
+    required String roomCode,
+  }) async {
+    final cleanCode = roomCode.trim().toUpperCase();
+    if (cleanCode.isEmpty) {
+      throw Exception('Please enter a valid room code');
+    }
+
+    if (!SupabaseConfig.isInitialized) {
+      final mock = Subject(
+        id: 'mock-subj-${cleanCode.toLowerCase()}',
+        name: 'Mock Subject ($cleanCode)',
+        code: cleanCode,
+        classId: 'mock-class-1',
+        className: 'Class A',
+        teacherId: 'mock-teacher-1',
+        teacherName: 'Faculty',
+        roomCode: cleanCode,
+        scheduleTime: '10:00 AM - 11:00 AM',
+        classroomName: 'Room 405',
+        gatewayId: 'BMA-Gateway-01',
+      );
+      return mock;
+    }
+
+    try {
+      final data = await SupabaseConfig.client
+          .from('subjects')
+          .select('*, classes(name), classrooms(name, gateway_id), profiles!subjects_teacher_id_fkey(name)')
+          .eq('room_code', cleanCode)
+          .maybeSingle();
+
+      if (data == null) {
+        throw Exception('No classroom found with room code "$cleanCode". Please verify with your teacher.');
+      }
+
+      final subject = Subject.fromJson(data);
+
+      // 1. Insert into student_rooms
+      await SupabaseConfig.client.from('student_rooms').upsert({
+        'subject_id': subject.id,
+        'student_id': studentId,
+      }, onConflict: 'student_id,subject_id');
+
+      // 2. Also ensure class membership
+      if (subject.classId.isNotEmpty) {
+        try {
+          await SupabaseConfig.client.from('class_members').upsert({
+            'class_id': subject.classId,
+            'student_id': studentId,
+          });
+        } catch (_) {}
+      }
+
+      return subject;
+    } catch (e) {
+      debugPrint('[AttendanceService] joinRoomByCode error: $e');
+      rethrow;
+    }
+  }
+
+  /// Fetch all rooms (subjects) joined by a student.
+  Future<List<Subject>> fetchStudentJoinedRooms(String studentId) async {
+    if (!SupabaseConfig.isInitialized) {
+      return [];
+    }
+
+    try {
+      final res = await SupabaseConfig.client
+          .from('student_rooms')
+          .select('subject_id, subjects(*, classes(name), classrooms(name, gateway_id), profiles!subjects_teacher_id_fkey(name))')
+          .eq('student_id', studentId)
+          .order('joined_at', ascending: false);
+
+      final List<Subject> rooms = [];
+      for (final item in (res as List)) {
+        if (item['subjects'] != null && item['subjects'] is Map) {
+          rooms.add(Subject.fromJson(item['subjects'] as Map<String, dynamic>));
+        }
+      }
+      return rooms;
+    } catch (e) {
+      debugPrint('[AttendanceService] fetchStudentJoinedRooms error: $e');
+      return [];
+    }
+  }
+
+  /// Leave or unenroll from a room.
+  Future<void> leaveRoom({
+    required String studentId,
+    required String subjectId,
+  }) async {
+    if (!SupabaseConfig.isInitialized) return;
+
+    try {
+      await SupabaseConfig.client
+          .from('student_rooms')
+          .delete()
+          .eq('student_id', studentId)
+          .eq('subject_id', subjectId);
+    } catch (e) {
+      debugPrint('[AttendanceService] leaveRoom error: $e');
+      rethrow;
+    }
+  }
+
+  /// Fetch active attendance session for a specific subject.
+  Future<AttendanceSession?> fetchActiveSessionForSubject(String subjectId) async {
+    if (!SupabaseConfig.isInitialized) {
+      if (_activeSession != null && _activeSession!.subjectId == subjectId && _activeSession!.isActive) {
+        return _activeSession;
+      }
+      return null;
+    }
+
+    try {
+      final res = await SupabaseConfig.client
+          .from('attendance_sessions')
+          .select('*, subjects(name, code), classes(name), classrooms(name)')
+          .eq('subject_id', subjectId)
+          .eq('status', 'ACTIVE')
+          .gt('expires_at', DateTime.now().toIso8601String())
+          .order('started_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+
+      if (res != null) {
+        return AttendanceSession.fromJson(res);
+      }
+    } catch (e) {
+      debugPrint('[AttendanceService] fetchActiveSessionForSubject error: $e');
+    }
+    return null;
+  }
+
+  /// Subscribe to active sessions for a specific subject in realtime.
+  RealtimeChannel? subscribeToSubjectSession({
+    required String subjectId,
+    required void Function(AttendanceSession?) onSessionChange,
+  }) {
+    if (!SupabaseConfig.isInitialized) {
+      if (_activeSession != null && _activeSession!.subjectId == subjectId && _activeSession!.isActive) {
+        onSessionChange(_activeSession);
+      } else {
+        onSessionChange(null);
+      }
+      return null;
+    }
+
+    try {
+      // 1. Initial query
+      fetchActiveSessionForSubject(subjectId).then(onSessionChange);
+
+      // 2. Realtime listener
+      final channel = SupabaseConfig.client
+          .channel('public:attendance_sessions:subject=$subjectId')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'attendance_sessions',
+            filter: PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'subject_id',
+              value: subjectId,
+            ),
+            callback: (payload) async {
+              final record = payload.newRecord;
+              if (record.isNotEmpty && record['status'] == 'ACTIVE') {
+                try {
+                  final full = await SupabaseConfig.client
+                      .from('attendance_sessions')
+                      .select('*, subjects(name, code), classes(name), classrooms(name)')
+                      .eq('id', record['id'])
+                      .single();
+                  final session = AttendanceSession.fromJson(full);
+                  if (session.isActive) {
+                    onSessionChange(session);
+                    return;
+                  }
+                } catch (_) {
+                  final session = AttendanceSession.fromJson(record);
+                  if (session.isActive) {
+                    onSessionChange(session);
+                    return;
+                  }
+                }
+              }
+              onSessionChange(null);
+            },
+          )
+          .subscribe();
+
+      return channel;
+    } catch (e) {
+      debugPrint('[AttendanceService] subscribeToSubjectSession error: $e');
+      return null;
+    }
+  }
+
+  /// Count how many students have joined a given room.
+  Future<int> fetchRoomEnrolledCount(String subjectId) async {
+    if (!SupabaseConfig.isInitialized) return 0;
+    try {
+      final res = await SupabaseConfig.client
+          .from('student_rooms')
+          .select('id')
+          .eq('subject_id', subjectId);
+      return (res as List).length;
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// Subscribe students to ACTIVE attendance sessions in realtime.

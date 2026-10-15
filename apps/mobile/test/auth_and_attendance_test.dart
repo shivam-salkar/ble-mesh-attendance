@@ -136,5 +136,33 @@ void main() {
       expect(attendanceService.activeSession?.status, SessionStatus.closed);
       expect(attendanceService.activeSession?.isActive, isFalse);
     });
+
+    test('generateRoomCode produces clean 6-character room codes', () {
+      final code1 = AttendanceService.generateRoomCode();
+      expect(code1.length, 6);
+      expect(code1, matches(r'^[A-Z0-9]{6}$'));
+
+      final code2 = AttendanceService.generateRoomCode('CS302');
+      expect(code2.startsWith('CS'), isTrue);
+      expect(code2.length, 6);
+    });
+
+    test('AttendanceSession timeRemainingFormatted formats mm:ss', () {
+      final now = DateTime.now();
+      final session = AttendanceSession(
+        id: 'sess-test',
+        classId: 'class-test',
+        subjectId: 'subj-test',
+        teacherId: 'teacher-test',
+        status: SessionStatus.active,
+        startedAt: now,
+        expiresAt: now.add(const Duration(minutes: 4, seconds: 35)),
+        sessionNonce: 'nonce-test',
+      );
+
+      final formatted = session.timeRemainingFormatted;
+      expect(formatted, contains(':'));
+      expect(formatted.length, 5);
+    });
   });
 }

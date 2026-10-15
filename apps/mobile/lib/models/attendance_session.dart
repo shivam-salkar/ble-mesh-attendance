@@ -68,6 +68,13 @@ class AttendanceSession {
     return expiresAt.difference(now);
   }
 
+  String get timeRemainingFormatted {
+    final rem = timeRemaining;
+    final mins = rem.inMinutes.toString().padLeft(2, '0');
+    final secs = (rem.inSeconds % 60).toString().padLeft(2, '0');
+    return '$mins:$secs';
+  }
+
   factory AttendanceSession.fromJson(Map<String, dynamic> json) {
     final expiresAt = json['expires_at'] != null
         ? DateTime.tryParse(json['expires_at'] as String) ?? DateTime.now()

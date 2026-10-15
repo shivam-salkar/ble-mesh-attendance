@@ -313,19 +313,32 @@ class BleService extends ChangeNotifier {
   }
 
   Future<void> disconnect() async {
+    final name = _connectedDeviceName;
     if (_connectedDevice != null) {
-      final name = _connectedDeviceName;
       try {
         await _connectedDevice!.disconnect();
       } catch (_) {}
-      _connectedDevice = null;
-      _connectedDeviceName = '';
-      _isConnected = false;
-      _gatewayPeerCount = 0;
-      _bleStatus = 'Disconnected';
-      _addEvent(BleEventType.disconnect, 'Disconnected from $name');
-      notifyListeners();
     }
+    _connectedDevice = null;
+    _connectedDeviceName = '';
+    _isConnected = false;
+    _gatewayPeerCount = 0;
+    _bleStatus = 'Disconnected';
+    if (name.isNotEmpty) {
+      _addEvent(BleEventType.disconnect, 'Disconnected from $name');
+    }
+    notifyListeners();
+  }
+
+  /// Connects to a simulated classroom gateway for development / testing.
+  void connectSimulatedGateway([String name = 'BMA-Gateway-01 (Simulated)']) {
+    _connectedDevice = null;
+    _connectedDeviceName = name;
+    _isConnected = true;
+    _gatewayPeerCount = 1;
+    _bleStatus = 'Connected to $name';
+    _addEvent(BleEventType.connect, 'Connected to $name (Simulation)');
+    notifyListeners();
   }
 
   void _subscribeToAck(List<BluetoothService> services) {
@@ -515,15 +528,34 @@ class BleService extends ChangeNotifier {
         'Submitting Attendance for "$name" [MAC: $mac] → $_connectedDeviceName');
 
     try {
-      final success = await _writePacket(packet);
-      if (success) {
-        _addEvent(BleEventType.info,
-            'Packet sent! Waiting for Gateway acknowledgment...');
+      if (_connectedDevice != null) {
+        final success = await _writePacket(packet);
+        if (success) {
+          _addEvent(BleEventType.info,
+              'Packet sent! Waiting for Gateway acknowledgment...');
+        } else {
+          _isSubmittingAttendance = false;
+          notifyListeners();
+        }
+        return success;
       } else {
+        // Simulated / development mode
+        _isAttendanceMarked = true;
         _isSubmittingAttendance = false;
+        _attendanceMarkedTime = DateTime.now();
+        _classroomAttendeeCount++;
+        _addEvent(BleEventType.ack,
+            'ACK from $_connectedDeviceName: RECORDED (count: $_classroomAttendeeCount)');
+        final idx = _attendees.indexWhere((a) => a.isSelf);
+        if (idx != -1) {
+          _attendees[idx] = _attendees[idx].copyWith(
+            isConfirmed: true,
+            timestamp: _attendanceMarkedTime,
+          );
+        }
         notifyListeners();
+        return true;
       }
-      return success;
     } catch (e) {
       _isSubmittingAttendance = false;
       _addEvent(BleEventType.error, 'Attendance submit failed: $e');

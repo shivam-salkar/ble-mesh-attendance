@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/attendance_service.dart';
 import '../../../models/attendance_session.dart';
@@ -21,6 +22,7 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
 
   List<Subject> _subjects = [];
   List<Classroom> _classrooms = [];
+  final Map<String, int> _enrolledCounts = {};
   bool _isLoading = true;
   Timer? _countdownTimer;
 
@@ -62,106 +64,291 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
         _classrooms = classrooms;
         _isLoading = false;
       });
+
+      for (final s in subjects) {
+        _attendanceService.fetchRoomEnrolledCount(s.id).then((count) {
+          if (mounted) {
+            setState(() {
+              _enrolledCounts[s.id] = count;
+            });
+          }
+        });
+      }
     }
   }
 
-  void _showAddSubjectDialog() {
-    final nameCtrl = TextEditingController();
-    final codeCtrl = TextEditingController();
-    final classCtrl = TextEditingController(text: 'CMPN-A');
-    final roomCtrl = TextEditingController(text: 'Room 101');
-    final gatewayCtrl = TextEditingController();
-
+  void _showRoomCreatedDialog(Subject subject) {
+    final roomCode = subject.roomCode ?? subject.code;
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('Add Subject & Classroom'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Subject Name (e.g. Operating Systems)',
-                  prefixIcon: Icon(Icons.menu_book),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            const Icon(Icons.check_circle, color: Colors.green, size: 28),
+            const SizedBox(width: 8),
+            const Text('Room Created!'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${subject.name} (${subject.code})',
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            Text(
+              'Class: ${subject.className ?? "CMPN-A"} • ${subject.scheduleTime ?? "10:00 AM - 11:00 AM"}',
+              style: TextStyle(color: Colors.grey.shade700, fontSize: 13),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              'Share this Room Code with your students:',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
+                  width: 1.5,
                 ),
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: codeCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Subject Code (e.g. CS302)',
-                  prefixIcon: Icon(Icons.code),
-                ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    roomCode,
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 3.0,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
+                  ),
+                  IconButton.filled(
+                    onPressed: () {
+                      Clipboard.setData(ClipboardData(text: roomCode));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Room code $roomCode copied to clipboard!'),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.copy, size: 20),
+                    tooltip: 'Copy Code',
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: classCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Class / Division (e.g. CMPN-A)',
-                  prefixIcon: Icon(Icons.groups),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: roomCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Classroom Name (e.g. Room 405)',
-                  prefixIcon: Icon(Icons.meeting_room),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: gatewayCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Gateway Code (Optional, e.g. ESP32_405)',
-                  prefixIcon: Icon(Icons.router),
-                ),
-              ),
-            ],
-          ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Students will enter this code on their dashboard to join this subject and connect to the classroom gateway.',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            ),
+          ],
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
-          ),
           FilledButton(
-            onPressed: () async {
-              if (nameCtrl.text.trim().isEmpty || codeCtrl.text.trim().isEmpty) return;
-              Navigator.of(ctx).pop();
-              setState(() => _isLoading = true);
-              try {
-                final teacherId = _authService.currentProfile?.id ?? '44444444-4444-4444-4444-444444444401';
-                await _attendanceService.createSubjectWithClassAndRoom(
-                  subjectName: nameCtrl.text.trim(),
-                  subjectCode: codeCtrl.text.trim(),
-                  className: classCtrl.text.trim().isEmpty ? 'CMPN-A' : classCtrl.text.trim(),
-                  teacherId: teacherId,
-                  roomName: roomCtrl.text.trim().isEmpty ? 'Room 101' : roomCtrl.text.trim(),
-                  gatewayCode: gatewayCtrl.text.trim().isEmpty ? null : gatewayCtrl.text.trim(),
-                );
-                await _loadData();
-              } catch (e) {
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Failed to add subject: $e'), backgroundColor: Colors.red),
-                  );
-                }
-              } finally {
-                if (mounted) setState(() => _isLoading = false);
-              }
-            },
-            child: const Text('Create'),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Done'),
           ),
         ],
       ),
     );
   }
 
+  void _showAddSubjectDialog() {
+    final nameCtrl = TextEditingController();
+    final codeCtrl = TextEditingController();
+    final classCtrl = TextEditingController(text: 'CMPN-A');
+    final roomCtrl = TextEditingController(text: _classrooms.isNotEmpty ? _classrooms.first.name : 'Room 101');
+    final timeCtrl = TextEditingController(text: '10:00 AM - 11:00 AM');
+    final gatewayCtrl = TextEditingController();
+    String generatedCode = AttendanceService.generateRoomCode();
+    final roomCodeCtrl = TextEditingController(text: generatedCode);
+
+    final timePresets = [
+      '09:00 AM - 10:00 AM',
+      '10:00 AM - 11:00 AM',
+      '11:15 AM - 12:15 PM',
+      '01:00 PM - 02:00 PM',
+      '02:00 PM - 03:00 PM',
+    ];
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Create Classroom Room / Subject'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Subject Name (e.g. Operating Systems)',
+                    prefixIcon: Icon(Icons.menu_book),
+                  ),
+                  onChanged: (val) {
+                    if (codeCtrl.text.isEmpty && val.isNotEmpty) {
+                      final words = val.trim().split(RegExp(r'\s+'));
+                      final initials = words.map((w) => w.isNotEmpty ? w[0].toUpperCase() : '').join();
+                      if (initials.isNotEmpty) {
+                        codeCtrl.text = initials.length > 4 ? initials.substring(0, 4) : initials;
+                        setDialogState(() {
+                          generatedCode = AttendanceService.generateRoomCode(codeCtrl.text);
+                          roomCodeCtrl.text = generatedCode;
+                        });
+                      }
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: codeCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Subject Code (e.g. CS302)',
+                    prefixIcon: Icon(Icons.code),
+                  ),
+                  onChanged: (val) {
+                    setDialogState(() {
+                      generatedCode = AttendanceService.generateRoomCode(val.trim());
+                      roomCodeCtrl.text = generatedCode;
+                    });
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: classCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Target Class / Division (e.g. CMPN-A)',
+                    prefixIcon: Icon(Icons.groups),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: roomCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Classroom Name (e.g. Room 405)',
+                    prefixIcon: Icon(Icons.meeting_room),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: timeCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Scheduled Lecture Time',
+                    prefixIcon: Icon(Icons.schedule),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: timePresets.map((preset) {
+                    final isSel = timeCtrl.text == preset;
+                    return ChoiceChip(
+                      label: Text(preset, style: const TextStyle(fontSize: 11)),
+                      selected: isSel,
+                      onSelected: (_) {
+                        setDialogState(() => timeCtrl.text = preset);
+                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: roomCodeCtrl,
+                        textCapitalization: TextCapitalization.characters,
+                        decoration: const InputDecoration(
+                          labelText: 'Room Code (Students will enter this)',
+                          prefixIcon: Icon(Icons.key),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Regenerate Code',
+                      icon: const Icon(Icons.refresh),
+                      onPressed: () {
+                        setDialogState(() {
+                          generatedCode = AttendanceService.generateRoomCode(codeCtrl.text.trim());
+                          roomCodeCtrl.text = generatedCode;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: gatewayCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Gateway Code (Optional, e.g. ESP32_405)',
+                    prefixIcon: Icon(Icons.router),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                if (nameCtrl.text.trim().isEmpty || codeCtrl.text.trim().isEmpty) return;
+                Navigator.of(ctx).pop();
+                setState(() => _isLoading = true);
+                try {
+                  final teacherId = _authService.currentProfile?.id ?? '44444444-4444-4444-4444-444444444401';
+                  final created = await _attendanceService.createSubjectWithClassAndRoom(
+                    subjectName: nameCtrl.text.trim(),
+                    subjectCode: codeCtrl.text.trim(),
+                    className: classCtrl.text.trim().isEmpty ? 'CMPN-A' : classCtrl.text.trim(),
+                    teacherId: teacherId,
+                    roomName: roomCtrl.text.trim().isEmpty ? 'Room 101' : roomCtrl.text.trim(),
+                    scheduleTime: timeCtrl.text.trim().isEmpty ? '10:00 AM - 11:00 AM' : timeCtrl.text.trim(),
+                    gatewayCode: gatewayCtrl.text.trim().isEmpty ? null : gatewayCtrl.text.trim(),
+                    roomCode: roomCodeCtrl.text.trim().isNotEmpty ? roomCodeCtrl.text.trim().toUpperCase() : generatedCode,
+                  );
+                  await _loadData();
+                  if (mounted) {
+                    _showRoomCreatedDialog(created);
+                  }
+                } catch (e) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      SnackBar(content: Text('Failed to add subject: $e'), backgroundColor: Colors.red),
+                    );
+                  }
+                } finally {
+                  if (mounted) setState(() => _isLoading = false);
+                }
+              },
+              child: const Text('Create Room'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showStartAttendanceDialog(Subject subject) {
-    String selectedRoomId = _classrooms.isNotEmpty ? _classrooms.first.id : 'default-room';
+    String selectedRoomId = subject.classroomId ?? (_classrooms.isNotEmpty ? _classrooms.first.id : 'default-room');
     int selectedDuration = 5;
     String sessionType = 'LECTURE';
 
@@ -178,8 +365,18 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                 children: [
                   Text('Class: ${subject.className ?? "CMPN-A"}',
                       style: const TextStyle(fontWeight: FontWeight.bold)),
+                  if (subject.roomCode != null) ...[
+                    const SizedBox(height: 4),
+                    Text('Room Code: ${subject.roomCode}',
+                        style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.bold)),
+                  ],
+                  if (subject.scheduleTime != null) ...[
+                    const SizedBox(height: 4),
+                    Text('Time: ${subject.scheduleTime}',
+                        style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                  ],
                   const SizedBox(height: 16),
-                  const Text('Select Classroom:'),
+                  const Text('Select Classroom / Gateway:'),
                   _classrooms.isEmpty
                       ? const Padding(
                           padding: EdgeInsets.symmetric(vertical: 8),
@@ -187,11 +384,13 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                         )
                       : DropdownButton<String>(
                           isExpanded: true,
-                          value: selectedRoomId == 'default-room' ? _classrooms.first.id : selectedRoomId,
+                          value: _classrooms.any((r) => r.id == selectedRoomId)
+                              ? selectedRoomId
+                              : _classrooms.first.id,
                           items: _classrooms.map((room) {
                             return DropdownMenuItem(
                               value: room.id,
-                              child: Text('${room.name} (${room.building})'),
+                              child: Text('${room.name} (${room.gatewayId ?? "ESP32"})'),
                             );
                           }).toList(),
                           onChanged: (val) {
@@ -422,10 +621,13 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
 
   Widget _buildSubjectCard(BuildContext context, Subject subject) {
     final theme = Theme.of(context);
+    final roomCode = subject.roomCode ?? subject.code;
+    final enrolledCount = _enrolledCounts[subject.id] ?? 0;
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      margin: const EdgeInsets.only(bottom: 14),
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -448,36 +650,146 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                     ),
                   ),
                 ),
-                Text(
-                  subject.className ?? 'CMPN-C',
-                  style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    subject.className ?? 'Classroom',
+                    style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             Text(
               subject.name,
-              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+                fontSize: 17,
+              ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 10),
+
+            // ROOM CODE BADGE WITH 1-CLICK COPY
+            InkWell(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: roomCode));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Room code $roomCode copied to clipboard!'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              },
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: theme.colorScheme.primary.withValues(alpha: 0.35),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.key, size: 18, color: theme.colorScheme.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'STUDENT ROOM CODE',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.8,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                          Text(
+                            roomCode,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 2.0,
+                              color: theme.colorScheme.onPrimaryContainer,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.copy, size: 18),
+                      color: theme.colorScheme.primary,
+                      tooltip: 'Copy Room Code',
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: roomCode));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Room code $roomCode copied to clipboard!'),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Class details: Schedule Time, Classroom/Gateway, Enrolled count
+            Row(
+              children: [
+                Icon(Icons.access_time, size: 16, color: theme.colorScheme.primary),
+                const SizedBox(width: 6),
+                Text(
+                  subject.scheduleTime ?? '10:00 AM - 11:00 AM',
+                  style: theme.textTheme.bodyMedium?.copyWith(color: Colors.grey.shade800),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
             Row(
               children: [
                 Icon(Icons.location_on_outlined, size: 16, color: theme.colorScheme.primary),
-                const SizedBox(width: 4),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '${subject.classroomName ?? "Room 101"} (${subject.gatewayId ?? "ESP32_GATEWAY"})',
+                    style: theme.textTheme.bodyMedium?.copyWith(color: Colors.grey.shade800),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Icon(Icons.people_outline, size: 16, color: theme.colorScheme.primary),
+                const SizedBox(width: 6),
                 Text(
-                  _classrooms.isNotEmpty
-                      ? '${_classrooms.first.name} (${_classrooms.first.gatewayId ?? "ESP32"})'
-                      : 'Classroom: Dynamic Selection',
+                  '$enrolledCount students joined',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: enrolledCount > 0 ? Colors.green.shade800 : Colors.grey.shade700,
+                  ),
                 ),
               ],
             ),
             const SizedBox(height: 16),
+
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
                 onPressed: () => _showStartAttendanceDialog(subject),
                 icon: const Icon(Icons.play_circle_fill, size: 20),
-                label: const Text('START ATTENDANCE'),
+                label: const Text('RECORD ATTENDANCE'),
                 style: FilledButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
