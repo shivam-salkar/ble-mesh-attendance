@@ -48,7 +48,6 @@ class _BleTestScreenState extends State<BleTestScreen>
   @override
   void dispose() {
     _bleService.removeListener(_onBleUpdate);
-    _bleService.dispose();
     _messageController.dispose();
     _tabController.dispose();
     super.dispose();

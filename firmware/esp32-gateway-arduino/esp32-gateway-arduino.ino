@@ -386,15 +386,24 @@ class GatewayServerCallbacks : public BLEServerCallbacks {
 
 class AttendanceCharCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* pCharacteristic) override {
-        String value = pCharacteristic->getValue();
-        size_t len = value.length();
+        size_t len = pCharacteristic->getLength();
+        uint8_t* rawData = pCharacteristic->getData();
 
-        if (len < 2) {
+        String strVal;
+        if (len == 0 || rawData == nullptr) {
+            strVal = pCharacteristic->getValue();
+            len = strVal.length();
+            rawData = (uint8_t*)strVal.c_str();
+        }
+
+        if (len < 2 || rawData == nullptr) {
             Serial.printf("[GATT] Received write too short: %d bytes\n", (int)len);
             return;
         }
 
-        const uint8_t* data = (const uint8_t*)value.c_str();
+        const uint8_t* data = rawData;
+        Serial.printf("[GATT WRITE] Received %d bytes (first byte: 0x%02X / '%c')\n",
+                      (int)len, data[0], (data[0] >= 32 && data[0] <= 126) ? (char)data[0] : '.');
 
         // Skip any leading whitespace if present
         size_t startIdx = 0;
@@ -499,6 +508,7 @@ void processPhase4Packet(const uint8_t* data, size_t length) {
     size_t copyLen = (length < sizeof(jsonBuf) - 1) ? length : sizeof(jsonBuf) - 1;
     memcpy(jsonBuf, data, copyLen);
     jsonBuf[copyLen] = '\0';
+    Serial.printf("[GATT] Raw JSON payload (%d bytes): %s\n", (int)copyLen, jsonBuf);
 
     // Extract fields
     char packetType[16]   = "";
@@ -1153,6 +1163,9 @@ void setup() {
     // ─── Initialize BLE ───
     Serial.println("[INIT] Initializing BLE...");
     BLEDevice::init(GATEWAY_DEVICE_NAME);
+
+    // Support up to 517-byte MTU for Phase 4 JSON payloads
+    BLEDevice::setMTU(517);
 
     // Set transmit power to maximum for better range in classroom
     BLEDevice::setPower(ESP_PWR_LVL_P9);

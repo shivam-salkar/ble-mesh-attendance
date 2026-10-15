@@ -90,7 +90,23 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
     try {
       await _bleService.initialize();
       final success = await _bleService.autoConnectGateway();
-      if (!success && mounted) {
+      if (success && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(Icons.bluetooth_connected, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('Connected to Gateway: ${_bleService.connectedDeviceName}'),
+                ),
+              ],
+            ),
+            backgroundColor: Colors.green.shade700,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      } else if (!success && mounted) {
         // Show dialog offering simulated gateway option if no hardware is in range
         showDialog(
           context: context,
@@ -138,7 +154,7 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
     final studentId = user?.id ?? (_studentProfile?.studentId ?? 'student-1');
 
     try {
-      // 1. BLE Gateway transmission
+      // 1. BLE Gateway transmission with adequate timeout for connect + write + ACK
       bool bleSuccess = false;
       try {
         bleSuccess = await _bleService.markAttendance(
@@ -147,7 +163,7 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
           studentName: studentName,
           studentId: rollNumber,
           deviceMac: macAddress,
-        ).timeout(const Duration(seconds: 4), onTimeout: () => false);
+        ).timeout(const Duration(seconds: 12), onTimeout: () => false);
       } catch (e) {
         debugPrint('[StudentRoomScreen] BLE transmission note: $e');
         bleSuccess = false;
@@ -178,12 +194,25 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
         setState(() => _markedRecord = record);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              bleSuccess
-                  ? '✓ Verified & Recorded via Classroom Gateway!'
-                  : '✓ Attendance Recorded (Development Direct)',
+            content: Row(
+              children: [
+                Icon(
+                  bleSuccess ? Icons.verified : Icons.cloud_done,
+                  color: Colors.white,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    bleSuccess
+                        ? '✓ Verified & Displayed on ESP32 Gateway Screen!'
+                        : '⚠ Saved to Cloud only: ESP32 Gateway was not reached.',
+                  ),
+                ),
+              ],
             ),
-            backgroundColor: Colors.green,
+            backgroundColor: bleSuccess ? Colors.green.shade700 : Colors.orange.shade800,
+            duration: const Duration(seconds: 4),
           ),
         );
       }

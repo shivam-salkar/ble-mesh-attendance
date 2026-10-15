@@ -15,6 +15,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
@@ -67,6 +68,10 @@ class DiscoveredDevice {
 
 /// The main BLE service for Attendance and Mesh Relay.
 class BleService extends ChangeNotifier {
+  static final BleService _instance = BleService._internal();
+  factory BleService() => _instance;
+  BleService._internal();
+
   // ─── State ─────────────────────────────────────────────────────
 
   final RelayEngine _relayEngine = RelayEngine();
@@ -91,6 +96,7 @@ class BleService extends ChangeNotifier {
   String? _lastMarkedPacketId;
   DateTime? _attendanceMarkedTime;
   int _classroomAttendeeCount = 0;
+  Completer<AckPacket>? _pendingAckCompleter;
 
   StreamSubscription? _scanSubscription;
   StreamSubscription? _ackSubscription;
@@ -152,7 +158,7 @@ class BleService extends ChangeNotifier {
 
   // ─── Scanning (Central Role) ───────────────────────────────────
 
-  Future<void> startScan() async {
+  Future<void> startScan({Duration timeout = const Duration(seconds: 8)}) async {
     if (_isScanning) return;
 
     _discoveredDevices.clear();
@@ -162,16 +168,8 @@ class BleService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      // Start scanning with our known service UUIDs
-      await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 10),
-        withServices: [BleUuids.gatewayService, BleUuids.relayService],
-        androidUsesFineLocation: true,
-      );
-
       _scanSubscription?.cancel();
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
-        _discoveredDevices.clear();
         for (final result in results) {
           final name = result.device.platformName.isNotEmpty
               ? result.device.platformName
@@ -186,27 +184,34 @@ class BleService extends ChangeNotifier {
               (name.startsWith('BMA-') && !isGateway);
 
           if (name.isNotEmpty || isGateway || isRelay) {
-            _discoveredDevices.add(DiscoveredDevice(
+            final dev = DiscoveredDevice(
               name: name.isEmpty ? result.device.remoteId.str : name,
               id: result.device.remoteId.str,
               rssi: result.rssi,
               isGateway: isGateway,
               isRelay: isRelay,
               fbpDevice: result.device,
-            ));
+            );
+            final idx = _discoveredDevices.indexWhere((d) => d.id == dev.id);
+            if (idx >= 0) {
+              _discoveredDevices[idx] = dev;
+            } else {
+              _discoveredDevices.add(dev);
+            }
           }
         }
         notifyListeners();
       });
 
-      // Also do a general scan without filter to find all BMA devices
       await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 10),
+        timeout: timeout,
         androidUsesFineLocation: true,
       );
 
-      // Wait for scan to complete
-      await Future.delayed(const Duration(seconds: 10));
+      await FlutterBluePlus.isScanning.where((s) => !s).first.timeout(
+        timeout + const Duration(seconds: 1),
+        onTimeout: () => false,
+      );
     } catch (e) {
       _addEvent(BleEventType.error, 'Scan error: $e');
     } finally {
@@ -250,6 +255,16 @@ class BleService extends ChangeNotifier {
       _bleStatus = 'Connected to ${device.name}';
       _addEvent(BleEventType.connect, 'Connected to ${device.name}');
 
+      // Negotiate higher MTU on Android for Phase 4 JSON payloads (ESP32 supports up to 517)
+      if (Platform.isAndroid) {
+        try {
+          final mtu = await device.fbpDevice!.requestMtu(512);
+          _addEvent(BleEventType.info, 'MTU negotiated: $mtu bytes');
+        } catch (e) {
+          _addEvent(BleEventType.info, 'MTU negotiation note: $e');
+        }
+      }
+
       // Listen for disconnection
       device.fbpDevice!.connectionState.listen((state) {
         if (state == BluetoothConnectionState.disconnected) {
@@ -286,20 +301,90 @@ class BleService extends ChangeNotifier {
   }
 
   /// Automatically connects to the closest classroom gateway if available.
-  Future<bool> autoConnectGateway() async {
-    if (_isConnected && _connectedDeviceName.contains('Gateway')) return true;
-
-    // Search discovered devices for gateway
-    final gateway = _discoveredDevices.where((d) => d.isGateway).firstOrNull;
-    if (gateway != null) {
-      return await connectToDevice(gateway);
+  Future<bool> autoConnectGateway({Duration timeout = const Duration(seconds: 5)}) async {
+    if (_isConnected && _connectedDevice != null && _connectedDeviceName.contains('Gateway')) {
+      return true;
     }
 
-    // Otherwise, run a brief scan
-    await startScan();
-    final foundGateway = _discoveredDevices.where((d) => d.isGateway).firstOrNull;
-    if (foundGateway != null) {
-      return await connectToDevice(foundGateway);
+    // Search already discovered devices for gateway
+    final existingGateway = _discoveredDevices.where((d) => d.isGateway).firstOrNull;
+    if (existingGateway != null) {
+      return await connectToDevice(existingGateway);
+    }
+
+    // Run targeted active scan that stops early when gateway is discovered
+    _isScanning = true;
+    _bleStatus = 'Searching for classroom gateway...';
+    _addEvent(BleEventType.scan, 'Scanning for classroom gateway...');
+    notifyListeners();
+
+    final completer = Completer<DiscoveredDevice?>();
+    StreamSubscription? quickScanSub;
+    Timer? quickScanTimer;
+
+    try {
+      quickScanSub = FlutterBluePlus.scanResults.listen((results) {
+        for (final result in results) {
+          final name = result.device.platformName.isNotEmpty
+              ? result.device.platformName
+              : result.advertisementData.advName;
+          final serviceUuids = result.advertisementData.serviceUuids;
+
+          final isGateway =
+              serviceUuids.contains(BleUuids.gatewayService) ||
+              name.startsWith('BMA-Gateway');
+          final isRelay =
+              serviceUuids.contains(BleUuids.relayService) ||
+              (name.startsWith('BMA-') && !isGateway);
+
+          if (name.isNotEmpty || isGateway || isRelay) {
+            final dev = DiscoveredDevice(
+              name: name.isEmpty ? result.device.remoteId.str : name,
+              id: result.device.remoteId.str,
+              rssi: result.rssi,
+              isGateway: isGateway,
+              isRelay: isRelay,
+              fbpDevice: result.device,
+            );
+            final idx = _discoveredDevices.indexWhere((d) => d.id == dev.id);
+            if (idx >= 0) {
+              _discoveredDevices[idx] = dev;
+            } else {
+              _discoveredDevices.add(dev);
+            }
+
+            if (isGateway && !completer.isCompleted) {
+              completer.complete(dev);
+              break;
+            }
+          }
+        }
+        notifyListeners();
+      });
+
+      quickScanTimer = Timer(timeout, () {
+        if (!completer.isCompleted) completer.complete(null);
+      });
+
+      await FlutterBluePlus.startScan(
+        timeout: timeout,
+        androidUsesFineLocation: true,
+      );
+
+      final found = await completer.future;
+      await FlutterBluePlus.stopScan();
+
+      if (found != null) {
+        return await connectToDevice(found);
+      }
+    } catch (e) {
+      _addEvent(BleEventType.error, 'Gateway search error: $e');
+    } finally {
+      quickScanTimer?.cancel();
+      await quickScanSub?.cancel();
+      _isScanning = false;
+      _bleStatus = _isConnected ? 'Connected' : 'Ready';
+      notifyListeners();
     }
 
     // If no direct gateway found, check for a mesh relay peer
@@ -396,6 +481,10 @@ class BleService extends ChangeNotifier {
               isSelf: true,
             ),
           );
+        }
+
+        if (_pendingAckCompleter != null && !_pendingAckCompleter!.isCompleted) {
+          _pendingAckCompleter!.complete(ack);
         }
 
         _addEvent(BleEventType.info,
@@ -529,14 +618,34 @@ class BleService extends ChangeNotifier {
 
     try {
       if (_connectedDevice != null) {
+        _pendingAckCompleter = Completer<AckPacket>();
         final success = await _writePacket(packet);
         if (success) {
           _addEvent(BleEventType.info,
               'Packet sent! Waiting for Gateway acknowledgment...');
-        } else {
-          _isSubmittingAttendance = false;
-          notifyListeners();
+          // Wait up to 5 seconds for Gateway ACK notification
+          try {
+            final ack = await _pendingAckCompleter!.future.timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => throw TimeoutException('Gateway ACK wait timeout'),
+            );
+            _addEvent(BleEventType.info,
+                '✓ Gateway Confirmed: ${ack.status} (${ack.attendeeCount} total in lecture)');
+          } catch (_) {
+            // Even if ACK notification was dropped, the GATT write succeeded on the gateway
+            _isAttendanceMarked = true;
+            _attendanceMarkedTime = DateTime.now();
+            final idx = _attendees.indexWhere((a) => a.isSelf);
+            if (idx != -1) {
+              _attendees[idx] = _attendees[idx].copyWith(
+                isConfirmed: true,
+                timestamp: _attendanceMarkedTime,
+              );
+            }
+          }
         }
+        _isSubmittingAttendance = false;
+        notifyListeners();
         return success;
       } else {
         // Simulated / development mode
@@ -622,7 +731,15 @@ class BleService extends ChangeNotifier {
       }
 
       final jsonBytes = utf8.encode(packet.toJsonString());
-      await targetChar.write(jsonBytes, withoutResponse: false);
+      _addEvent(BleEventType.tx,
+          'Writing packet ${packet.packetId} (${jsonBytes.length} bytes)...');
+
+      try {
+        await targetChar.write(jsonBytes, withoutResponse: false, allowLongWrite: true);
+      } catch (e) {
+        _addEvent(BleEventType.info, 'Write with response note: $e. Retrying without response...');
+        await targetChar.write(jsonBytes, withoutResponse: true);
+      }
 
       _addEvent(BleEventType.tx,
           'Sent: ${packet.packetId} (${jsonBytes.length} bytes)');
@@ -709,10 +826,6 @@ class BleService extends ChangeNotifier {
     _scanSubscription?.cancel();
     _ackSubscription?.cancel();
     _statusSubscription?.cancel();
-    _connectedDevice?.disconnect();
-    if (_relayMode) {
-      FlutterBlePeripheral().stop();
-    }
     super.dispose();
   }
 }

@@ -94,10 +94,16 @@ class RelayPacket {
       ..write('"t":"$type",')
       ..write('"pid":"$packetId",')
       ..write('"oid":"$originId",')
-      ..write('"sp":"$sourcePlatform",')
-      ..write('"sname":"$studentName",')
-      ..write('"sid":"$studentId",')
-      ..write('"mac":"$deviceMac",');
+      ..write('"sp":"$sourcePlatform",');
+    if (studentName.isNotEmpty) {
+      buffer.write('"sname":"$studentName",');
+    }
+    if (studentId.isNotEmpty) {
+      buffer.write('"sid":"$studentId",');
+    }
+    if (deviceMac.isNotEmpty) {
+      buffer.write('"mac":"$deviceMac",');
+    }
     if (sessionId != null && sessionId!.isNotEmpty) {
       buffer.write('"sess":"$sessionId",');
     }
