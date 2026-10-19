@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import '../core/config/supabase_config.dart';
 import '../models/profile.dart';
@@ -12,6 +14,8 @@ class AuthService extends ChangeNotifier {
   factory AuthService() => _instance;
   AuthService._internal();
 
+  static const _savedProfileKey = 'saved_user_profile';
+
   UserProfile? _currentProfile;
   UserProfile? get currentProfile => _currentProfile;
 
@@ -20,19 +24,62 @@ class AuthService extends ChangeNotifier {
   bool get isStudent => _currentProfile?.isStudent ?? false;
   bool get isAdmin => _currentProfile?.isAdmin ?? false;
 
-  /// Check active session on startup.
-  Future<UserProfile?> checkSession() async {
-    if (!SupabaseConfig.isInitialized) return _currentProfile;
-
+  Future<void> _persistProfile(UserProfile profile) async {
     try {
-      final session = SupabaseConfig.client.auth.currentSession;
-      if (session != null) {
-        return await fetchProfile(session.user.id);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_savedProfileKey, jsonEncode(profile.toJson()));
+    } catch (e) {
+      debugPrint('[AuthService] _persistProfile error: $e');
+    }
+  }
+
+  Future<UserProfile?> _loadSavedProfile() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final str = prefs.getString(_savedProfileKey);
+      if (str != null && str.isNotEmpty) {
+        final map = jsonDecode(str) as Map<String, dynamic>;
+        return UserProfile.fromJson(map);
       }
     } catch (e) {
-      debugPrint('[AuthService] checkSession error: $e');
+      debugPrint('[AuthService] _loadSavedProfile error: $e');
     }
     return null;
+  }
+
+  Future<void> _clearSavedProfile() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_savedProfileKey);
+    } catch (_) {}
+  }
+
+  /// Check active session on startup.
+  Future<UserProfile?> checkSession() async {
+    if (SupabaseConfig.isInitialized) {
+      try {
+        final session = SupabaseConfig.client.auth.currentSession;
+        if (session != null) {
+          final profile = await fetchProfile(session.user.id);
+          if (profile != null) {
+            _currentProfile = profile;
+            unawaited(_persistProfile(profile));
+            return profile;
+          }
+        }
+      } catch (e) {
+        debugPrint('[AuthService] checkSession Supabase error: $e');
+      }
+    }
+
+    // Offline / Demo restore: Recover the persisted account from local storage
+    final saved = await _loadSavedProfile();
+    if (saved != null) {
+      _currentProfile = saved;
+      notifyListeners();
+      return saved;
+    }
+    return _currentProfile;
   }
 
   /// Sign in with Email and Password via Supabase Auth.
@@ -58,6 +105,7 @@ class AuthService extends ChangeNotifier {
       if (profile == null) throw Exception('User profile not found in database');
 
       _currentProfile = profile;
+      unawaited(_persistProfile(profile));
       if (profile.isStudent) {
         unawaited(StudentProfileService.saveProfile(
           name: profile.name,
@@ -115,6 +163,7 @@ class AuthService extends ChangeNotifier {
 
       final profile = UserProfile.fromJson(insertRes);
       _currentProfile = profile;
+      unawaited(_persistProfile(profile));
       if (profile.isStudent) {
         unawaited(StudentProfileService.saveProfile(
           name: profile.name,
@@ -243,6 +292,7 @@ class AuthService extends ChangeNotifier {
         debugPrint('[AuthService] signOut error: $e');
       }
     }
+    await _clearSavedProfile();
     _currentProfile = null;
     notifyListeners();
   }
@@ -257,8 +307,10 @@ class AuthService extends ChangeNotifier {
 
     // Ensure generatedId is ALWAYS a valid RFC 4122 UUID
     final String generatedId;
-    if (lower.contains('suvarna') || lower.contains('bhat') || lower == 'teacher@college.edu') {
+    if (lower.contains('suvarna') || lower.contains('bhat')) {
       generatedId = 'cec26a0c-1c06-4755-8625-9b3dbe266746';
+    } else if (lower == 'teacher@college.edu') {
+      generatedId = 'a0000000-0000-0000-0000-000000000001';
     } else if (lower.contains('aryan') || lower.contains('darekar') || lower == 'student@college.edu') {
       generatedId = 'c74da711-97f9-4387-a5cd-a7428bbc6491';
     } else {
@@ -291,6 +343,7 @@ class AuthService extends ChangeNotifier {
         createdAt: DateTime.now(),
       );
     }
+    unawaited(_persistProfile(_currentProfile!));
     notifyListeners();
     return _currentProfile!;
   }
@@ -303,8 +356,10 @@ class AuthService extends ChangeNotifier {
   ) {
     final lower = email.toLowerCase().trim();
     final String generatedId;
-    if (lower.contains('suvarna') || lower.contains('bhat') || role == UserRole.teacher) {
+    if (lower.contains('suvarna') || lower.contains('bhat')) {
       generatedId = 'cec26a0c-1c06-4755-8625-9b3dbe266746';
+    } else if (lower == 'teacher@college.edu') {
+      generatedId = 'a0000000-0000-0000-0000-000000000001';
     } else if (lower.contains('aryan') || lower.contains('darekar') || role == UserRole.student) {
       generatedId = 'c74da711-97f9-4387-a5cd-a7428bbc6491';
     } else {
@@ -319,6 +374,7 @@ class AuthService extends ChangeNotifier {
       rollNumber: rollNumber,
       createdAt: DateTime.now(),
     );
+    unawaited(_persistProfile(_currentProfile!));
     notifyListeners();
     return _currentProfile!;
   }

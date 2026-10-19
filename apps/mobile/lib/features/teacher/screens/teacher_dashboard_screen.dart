@@ -53,8 +53,10 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
-    final teacherId = _authService.currentProfile?.id ?? 'cec26a0c-1c06-4755-8625-9b3dbe266746';
-    final subjects = await _attendanceService.fetchTeacherSubjects(teacherId);
+    final profile = _authService.currentProfile;
+    final teacherId = profile?.id ?? 'a0000000-0000-0000-0000-000000000001';
+    final teacherEmail = profile?.email;
+    final subjects = await _attendanceService.fetchTeacherSubjects(teacherId, email: teacherEmail);
     final classrooms = await _attendanceService.fetchClassrooms();
     await _attendanceService.fetchActiveSessionForTeacher(teacherId);
 
@@ -314,12 +316,17 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                 Navigator.of(ctx).pop();
                 setState(() => _isLoading = true);
                 try {
-                  final teacherId = _authService.currentProfile?.id ?? 'cec26a0c-1c06-4755-8625-9b3dbe266746';
+                  final profile = _authService.currentProfile;
+                  final teacherId = profile?.id ?? 'a0000000-0000-0000-0000-000000000001';
+                  final teacherEmail = profile?.email;
+                  final teacherName = profile?.name;
                   final created = await _attendanceService.createSubjectWithClassAndRoom(
                     subjectName: nameCtrl.text.trim(),
                     subjectCode: codeCtrl.text.trim(),
                     className: classCtrl.text.trim().isEmpty ? 'CMPN-A' : classCtrl.text.trim(),
                     teacherId: teacherId,
+                    teacherEmail: teacherEmail,
+                    teacherName: teacherName,
                     roomName: roomCtrl.text.trim().isEmpty ? 'Room 101' : roomCtrl.text.trim(),
                     scheduleTime: timeCtrl.text.trim().isEmpty ? '10:00 AM - 11:00 AM' : timeCtrl.text.trim(),
                     gatewayCode: gatewayCtrl.text.trim().isEmpty ? null : gatewayCtrl.text.trim(),

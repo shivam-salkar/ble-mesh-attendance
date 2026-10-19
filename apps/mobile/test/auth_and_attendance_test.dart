@@ -1,10 +1,17 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ble_mesh_attendance/models/profile.dart';
 import 'package:ble_mesh_attendance/models/attendance_session.dart';
 import 'package:ble_mesh_attendance/services/auth_service.dart';
 import 'package:ble_mesh_attendance/services/attendance_service.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   final authService = AuthService();
 
   group('AuthService Tests', () {
@@ -203,6 +210,33 @@ void main() {
       expect(subj.id, isNotEmpty);
       expect(subj.name, 'Operating Systems');
       expect(AttendanceService.isValidUuid(subj.teacherId), isTrue);
+    });
+
+    test('Teacher created room persists and is visible when teacher account logs in', () async {
+      SharedPreferences.setMockInitialValues({});
+      const teacherEmail = 'prof.ai@college.edu';
+      final profile = await authService.signIn(email: teacherEmail, password: 'password123');
+
+      final created = await attendanceService.createSubjectWithClassAndRoom(
+        subjectName: 'Artificial Intelligence',
+        subjectCode: 'AI401',
+        className: 'TE CMPN-A',
+        teacherId: profile.id,
+        teacherEmail: profile.email,
+        teacherName: profile.name,
+        roomName: 'Lab 402',
+      );
+      expect(created.roomCode, isNotNull);
+
+      // Now simulate a fresh login with the same teacher account
+      final freshAuth = AuthService();
+      final freshProfile = await freshAuth.signIn(email: teacherEmail, password: 'password123');
+      final subjects = await attendanceService.fetchTeacherSubjects(
+        freshProfile.id,
+        email: freshProfile.email,
+      );
+
+      expect(subjects.any((s) => s.code == 'AI401' && s.name == 'Artificial Intelligence'), isTrue);
     });
   });
 }

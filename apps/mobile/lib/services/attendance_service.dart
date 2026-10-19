@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../core/config/supabase_config.dart';
 import '../models/attendance_session.dart';
@@ -34,9 +36,74 @@ class AttendanceService extends ChangeNotifier {
     return _uuidRegex.hasMatch(id.trim());
   }
 
+  static String _teacherStorageKey(String? teacherId, {String? email}) {
+    final cleanEmail = email?.trim().toLowerCase();
+    if (cleanEmail != null && cleanEmail.isNotEmpty) {
+      return 'teacher_rooms_${cleanEmail.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_')}';
+    }
+    final cleanId = teacherId?.trim().toLowerCase() ?? 'default_teacher';
+    return 'teacher_rooms_${cleanId.replaceAll(RegExp(r'[^a-zA-Z0-9_]'), '_')}';
+  }
+
+  /// Load locally persisted subjects created by a teacher account.
+  Future<List<Subject>> loadPersistedTeacherSubjects(String? teacherId, {String? email}) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = _teacherStorageKey(teacherId, email: email);
+      final raw = prefs.getString(key);
+      if (raw != null && raw.isNotEmpty) {
+        final list = jsonDecode(raw) as List;
+        return list.map((e) => Subject.fromJson(e as Map<String, dynamic>)).toList();
+      }
+    } catch (e) {
+      debugPrint('[AttendanceService] loadPersistedTeacherSubjects error: $e');
+    }
+    return [];
+  }
+
+  /// Save persistent list of subjects created by a teacher account.
+  Future<void> savePersistedTeacherSubjects(
+    String? teacherId,
+    List<Subject> subjects, {
+    String? email,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = _teacherStorageKey(teacherId, email: email);
+      final jsonList = subjects.map((s) => s.toJson()).toList();
+      await prefs.setString(key, jsonEncode(jsonList));
+    } catch (e) {
+      debugPrint('[AttendanceService] savePersistedTeacherSubjects error: $e');
+    }
+  }
+
+  /// Persist a single newly created subject to local storage for the teacher account.
+  Future<void> persistSingleTeacherSubject(
+    String? teacherId,
+    Subject subject, {
+    String? email,
+  }) async {
+    try {
+      final existing = await loadPersistedTeacherSubjects(teacherId, email: email);
+      final updated = <Subject>[subject];
+      for (final s in existing) {
+        if (s.id != subject.id && s.roomCode != subject.roomCode) {
+          updated.add(s);
+        }
+      }
+      await savePersistedTeacherSubjects(teacherId, updated, email: email);
+    } catch (e) {
+      debugPrint('[AttendanceService] persistSingleTeacherSubject error: $e');
+    }
+  }
+
   /// Resolves any teacher identifier (timestamp, mock string, or auth user ID)
   /// into a guaranteed valid profile UUID that exists in `public.profiles`.
-  Future<String> resolveTeacherUuid(String? teacherId) async {
+  Future<String> resolveTeacherUuid(
+    String? teacherId, {
+    String? email,
+    String? name,
+  }) async {
     const knownTeacherUuid = 'cec26a0c-1c06-4755-8625-9b3dbe266746';
 
     if (!SupabaseConfig.isInitialized) {
@@ -69,11 +136,12 @@ class AttendanceService extends ChangeNotifier {
           return byAuth['id'] as String;
         }
 
-        if (currentAuthUser.email != null) {
+        final authEmail = currentAuthUser.email?.trim().toLowerCase();
+        if (authEmail != null && authEmail.isNotEmpty) {
           final byEmail = await SupabaseConfig.client
               .from('profiles')
               .select('id')
-              .eq('email', currentAuthUser.email!.trim().toLowerCase())
+              .eq('email', authEmail)
               .maybeSingle();
           if (byEmail != null && byEmail['id'] != null) {
             final id = byEmail['id'] as String;
@@ -88,41 +156,39 @@ class AttendanceService extends ChangeNotifier {
         }
       }
 
-      // 3. Fallback to any teacher profile in the database
-      final anyTeacher = await SupabaseConfig.client
-          .from('profiles')
-          .select('id')
-          .eq('role', 'teacher')
-          .limit(1)
-          .maybeSingle();
-      if (anyTeacher != null && anyTeacher['id'] != null) {
-        return anyTeacher['id'] as String;
+      // 3. Search profile by provided email
+      final searchEmail = (email ?? currentAuthUser?.email)?.trim().toLowerCase();
+      if (searchEmail != null && searchEmail.isNotEmpty) {
+        final byEmail = await SupabaseConfig.client
+            .from('profiles')
+            .select('id')
+            .eq('email', searchEmail)
+            .maybeSingle();
+        if (byEmail != null && byEmail['id'] != null) {
+          return byEmail['id'] as String;
+        }
       }
 
-      // 4. Check known fallback in DB
-      final knownCheck = await SupabaseConfig.client
-          .from('profiles')
-          .select('id')
-          .eq('id', knownTeacherUuid)
-          .maybeSingle();
-      if (knownCheck != null) {
-        return knownTeacherUuid;
-      }
+      // 4. Auto-create this teacher's dedicated profile with their own email & ID
+      final targetEmail = searchEmail ?? 'teacher@college.edu';
+      final targetName = name ?? currentAuthUser?.userMetadata?['name'] ?? 'Faculty Teacher';
+      final targetId = isValidUuid(teacherId) ? teacherId!.trim() : null;
 
-      // 5. If profiles table has no teacher, insert one
-      final newTeacher = await SupabaseConfig.client
+      final inserted = await SupabaseConfig.client
           .from('profiles')
-          .insert({
-            'name': 'Faculty Teacher',
-            'email': currentAuthUser?.email ?? 'teacher@college.edu',
+          .upsert({
+            if (targetId != null) 'id': targetId,
+            'name': targetName,
+            'email': targetEmail,
             'role': 'teacher',
             if (currentAuthUser != null) 'auth_user_id': currentAuthUser.id,
-          })
+          }, onConflict: 'email')
           .select('id')
           .single();
-      return newTeacher['id'] as String;
+      return inserted['id'] as String;
     } catch (e) {
       debugPrint('[AttendanceService] resolveTeacherUuid fallback: $e');
+      if (isValidUuid(teacherId)) return teacherId!.trim();
       return knownTeacherUuid;
     }
   }
@@ -267,13 +333,23 @@ class AttendanceService extends ChangeNotifier {
   }
 
   /// Fetch subjects/rooms assigned to a teacher.
-  Future<List<Subject>> fetchTeacherSubjects(String teacherId) async {
+  /// Always loads locally persisted rooms so rooms are visible on every login even offline.
+  Future<List<Subject>> fetchTeacherSubjects(String teacherId, {String? email}) async {
+    // 1. Immediately load locally persisted subjects for this teacher account
+    final localSubjects = await loadPersistedTeacherSubjects(teacherId, email: email);
+
     if (!SupabaseConfig.isInitialized) {
-      return _mockSubjects;
+      final combined = <Subject>[...localSubjects];
+      for (final ms in _mockSubjects) {
+        if (!combined.any((s) => s.id == ms.id || (ms.roomCode != null && s.roomCode == ms.roomCode))) {
+          combined.add(ms);
+        }
+      }
+      return combined;
     }
 
     try {
-      final validTeacherId = await resolveTeacherUuid(teacherId);
+      final validTeacherId = await resolveTeacherUuid(teacherId, email: email);
       final res = await SupabaseConfig.client
           .from('subjects')
           .select('*, classes(name), classrooms(name, gateway_id)')
@@ -285,14 +361,29 @@ class AttendanceService extends ChangeNotifier {
           .toList();
 
       final combined = <Subject>[...remote];
+
+      // Merge local subjects that might not yet be in remote
+      for (final ls in localSubjects) {
+        if (!combined.any((s) => s.id == ls.id || (ls.roomCode != null && s.roomCode == ls.roomCode))) {
+          combined.add(ls);
+        }
+      }
+
+      // Merge in-memory mock subjects
       for (final ms in _mockSubjects) {
-        if (!combined.any((s) => s.id == ms.id || s.roomCode == ms.roomCode)) {
+        if (!combined.any((s) => s.id == ms.id || (ms.roomCode != null && s.roomCode == ms.roomCode))) {
           combined.add(ms);
         }
       }
+
+      // Cache the merged set for this teacher account
+      await savePersistedTeacherSubjects(validTeacherId, combined, email: email);
       return combined;
     } catch (e) {
       debugPrint('[AttendanceService] fetchTeacherSubjects error: $e');
+      if (localSubjects.isNotEmpty) {
+        return localSubjects;
+      }
       return _mockSubjects;
     }
   }
@@ -324,6 +415,8 @@ class AttendanceService extends ChangeNotifier {
     required String subjectCode,
     required String className,
     required String teacherId,
+    String? teacherEmail,
+    String? teacherName,
     String branch = 'Computer Engineering',
     int semester = 5,
     String roomName = 'Room 101',
@@ -332,7 +425,11 @@ class AttendanceService extends ChangeNotifier {
     String? gatewayCode,
     String? roomCode,
   }) async {
-    final validTeacherId = await resolveTeacherUuid(teacherId);
+    final validTeacherId = await resolveTeacherUuid(
+      teacherId,
+      email: teacherEmail,
+      name: teacherName,
+    );
 
     final code = (roomCode != null && roomCode.trim().isNotEmpty)
         ? roomCode.trim().toUpperCase()
@@ -345,6 +442,7 @@ class AttendanceService extends ChangeNotifier {
       classId: 'class-${DateTime.now().millisecondsSinceEpoch}',
       className: className,
       teacherId: validTeacherId,
+      teacherName: teacherName,
       roomCode: code,
       scheduleTime: scheduleTime,
       classroomName: roomName,
@@ -353,6 +451,7 @@ class AttendanceService extends ChangeNotifier {
 
     if (!SupabaseConfig.isInitialized) {
       _mockSubjects.insert(0, offlineSubj);
+      await persistSingleTeacherSubject(validTeacherId, offlineSubj, email: teacherEmail);
       return offlineSubj;
     }
 
@@ -436,6 +535,7 @@ class AttendanceService extends ChangeNotifier {
 
       final created = Subject.fromJson(insertedSubj);
       _mockSubjects.insert(0, created);
+      await persistSingleTeacherSubject(validTeacherId, created, email: teacherEmail);
       return created;
     } catch (e) {
       debugPrint('[AttendanceService] createSubjectWithClassAndRoom error: $e');
@@ -448,6 +548,7 @@ class AttendanceService extends ChangeNotifier {
       if (isNetworkError) {
         debugPrint('[AttendanceService] Network unreachable: returning local offline subject with code: $code');
         _mockSubjects.insert(0, offlineSubj);
+        await persistSingleTeacherSubject(validTeacherId, offlineSubj, email: teacherEmail);
         return offlineSubj;
       }
       rethrow;
