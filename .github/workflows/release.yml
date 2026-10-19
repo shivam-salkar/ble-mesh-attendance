@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version tag (e.g. v0.5.0-phase4)'
+        description: 'Release version tag (e.g. v0.7.0-phase4)'
         required: true
-        default: 'v0.5.0-phase4'
+        default: 'v0.7.0-phase4'
   push:
     tags:
       - 'v*'
@@ -36,7 +36,7 @@ jobs:
           elif [ "${{ github.ref_type }}" = "tag" ]; then
             echo "VERSION=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           else
-            echo "VERSION=v0.5.0-phase4" >> "$GITHUB_OUTPUT"
+            echo "VERSION=v0.7.0-phase4" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Setup Java 17
