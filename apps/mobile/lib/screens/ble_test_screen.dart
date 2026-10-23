@@ -342,29 +342,37 @@ class _BleTestScreenState extends State<BleTestScreen>
     final isSubmitting = _bleService.isSubmittingAttendance;
 
     if (isMarked) {
+      final isDark = Theme.of(context).brightness == Brightness.dark;
       final timeStr = _bleService.attendanceMarkedTime != null
           ? '${_bleService.attendanceMarkedTime!.hour.toString().padLeft(2, '0')}:${_bleService.attendanceMarkedTime!.minute.toString().padLeft(2, '0')}:${_bleService.attendanceMarkedTime!.second.toString().padLeft(2, '0')}'
           : 'Just now';
 
       return Card(
-        color: Colors.green.shade50,
+        color: isDark ? const Color(0xFF0D3319) : const Color(0xFFE8F5E9),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
-          side: BorderSide(color: Colors.green.shade400, width: 1.5),
+          side: BorderSide(
+            color: isDark ? const Color(0xFF22C55E) : const Color(0xFF4CAF50),
+            width: 1.5,
+          ),
         ),
         elevation: 3,
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              const Icon(Icons.check_circle, color: Colors.green, size: 54),
+              Icon(
+                Icons.check_circle,
+                color: isDark ? const Color(0xFF4ADE80) : const Color(0xFF15803D),
+                size: 54,
+              ),
               const SizedBox(height: 10),
-              const Text(
+              Text(
                 'ATTENDANCE CONFIRMED!',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
-                  color: Colors.green,
+                  color: isDark ? Colors.white : const Color(0xFF14532D),
                   letterSpacing: 0.5,
                 ),
               ),
@@ -373,15 +381,17 @@ class _BleTestScreenState extends State<BleTestScreen>
                 'Recorded by Gateway at $timeStr',
                 style: TextStyle(
                   fontSize: 13,
-                  color: Colors.green.shade800,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF14532D),
                 ),
               ),
+              const SizedBox(height: 2),
               Text(
                 'Linked MAC: ${_bleService.macAddress}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 11,
                   fontFamily: 'monospace',
-                  color: Colors.black54,
+                  color: isDark ? const Color(0xFF94A3B8) : Colors.black54,
                 ),
               ),
               const SizedBox(height: 14),
@@ -390,8 +400,10 @@ class _BleTestScreenState extends State<BleTestScreen>
                 icon: const Icon(Icons.refresh, size: 16),
                 label: const Text('Re-submit Attendance'),
                 style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.green.shade800,
-                  side: BorderSide(color: Colors.green.shade400),
+                  foregroundColor: isDark ? const Color(0xFF4ADE80) : const Color(0xFF14532D),
+                  side: BorderSide(
+                    color: isDark ? const Color(0xFF22C55E) : const Color(0xFF4CAF50),
+                  ),
                 ),
               ),
             ],

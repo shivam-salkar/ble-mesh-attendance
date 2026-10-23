@@ -565,6 +565,7 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
 
   Widget _buildHistoryTile(AttendanceRecord record) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final timeStr = '${record.timestamp.hour.toString().padLeft(2, '0')}:${record.timestamp.minute.toString().padLeft(2, '0')}';
 
     return Card(
@@ -576,20 +577,27 @@ class _StudentDashboardScreenState extends State<StudentDashboardScreen> {
       ),
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: Colors.green.shade100,
-          child: Icon(Icons.check, color: Colors.green.shade800),
+          backgroundColor: isDark ? const Color(0xFF144D29) : Colors.green.shade100,
+          child: Icon(
+            Icons.check,
+            color: isDark ? const Color(0xFF4ADE80) : const Color(0xFF14532D),
+          ),
         ),
         title: const Text('Lecture Attendance Verified', style: TextStyle(fontWeight: FontWeight.bold)),
         subtitle: Text('Recorded: $timeStr • Via ${record.verificationMethod ?? "BLE_GATEWAY"}'),
         trailing: Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: BoxDecoration(
-            color: Colors.green.shade100,
+            color: isDark ? const Color(0xFF144D29) : Colors.green.shade100,
             borderRadius: BorderRadius.circular(6),
           ),
           child: Text(
             record.status,
-            style: TextStyle(color: Colors.green.shade800, fontSize: 11, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              color: isDark ? const Color(0xFF4ADE80) : const Color(0xFF14532D),
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ),
       ),

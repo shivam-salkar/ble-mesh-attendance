@@ -1,12 +1,12 @@
-name: Build & Release (APK + IPA)
+name: Build & Release (ARM APK + iOS IPA)
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version tag (e.g. v0.7.1-phase4)'
+        description: 'Release version tag (e.g. v0.7.2-arm)'
         required: true
-        default: 'v0.7.1-phase4'
+        default: 'v0.7.2-arm'
   push:
     tags:
       - 'v*'
@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   build-and-release:
-    name: 🚀 Build APKs & IPA and Release
+    name: 🚀 Build ARM APKs & iOS IPA and Release
     runs-on: macos-latest
     defaults:
       run:
@@ -36,7 +36,7 @@ jobs:
           elif [ "${{ github.ref_type }}" = "tag" ]; then
             echo "VERSION=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           else
-            echo "VERSION=v0.7.1-phase4" >> "$GITHUB_OUTPUT"
+            echo "VERSION=v0.7.2-arm" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Setup Java 17
@@ -72,23 +72,18 @@ jobs:
       - name: Prepare Artifacts Directory
         run: mkdir -p "$GITHUB_WORKSPACE/release-assets"
 
-      # ── 1. Build Universal Android APK ──
-      - name: Build Universal Android APK
-        run: flutter build apk --release
+      # ── 1. Build Split Android ARM APKs only (No Universal APK) ──
+      - name: Build Android ARM APKs (arm64-v8a & armeabi-v7a)
+        run: flutter build apk --split-per-abi --release --target-platform android-arm,android-arm64
 
-      - name: Prepare Universal APK Artifact
-        run: |
-          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-universal.apk"
-
-      # ── 2. Build Split Android APK (arm64-v8a slim) ──
-      - name: Build Split Android APKs (arm64-v8a)
-        run: flutter build apk --split-per-abi --release
-
-      - name: Prepare arm64-v8a APK Artifact
+      - name: Prepare Android ARM Artifacts
         run: |
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-arm64-v8a.apk"
+          if [ -f "build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk" ]; then
+            cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk "$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-armeabi-v7a.apk"
+          fi
 
-      # ── 3. Build iOS Unsigned IPA ──
+      # ── 2. Build iOS Unsigned IPA ──
       - name: Disable Apple Team Requirement
         run: |
           sed -i '' 's/DEVELOPMENT_TEAM = [A-Z0-9]*;//g' ios/Runner.xcodeproj/project.pbxproj
@@ -105,7 +100,7 @@ jobs:
           zip -qq -r -9 "$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}.ipa" Payload
         working-directory: apps/mobile/build/ios/iphoneos
 
-      # ── 4. Publish GitHub Release ──
+      # ── 3. Publish GitHub Release ──
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -118,34 +113,38 @@ jobs:
           | File | Description |
           | :--- | :--- |
           | **`ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-arm64-v8a.apk`** | ⚡ **Recommended** for modern Android devices (64-bit ARM) |
-          | **`ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-universal.apk`** | 🌐 **Universal Android** — compatible with all Android devices & tablets |
+          | **`ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-armeabi-v7a.apk`** | 📱 Compatible with 32-bit ARM Android devices |
           | **`ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}.ipa`** | 🍎 **iOS Unsigned IPA** (Install via AltStore / Sideloadly / TrollStore / Scarlet) |
 
           #### 🚀 Highlights in this Release:
+          - 🎨 **High-Contrast Dark & Light Theme UI**:
+            - Fixed text contrast on green backgrounds across Teacher and Student portals.
+            - "ATTENDANCE ACTIVE" card in Teacher Dashboard now uses crisp, theme-aware text with clear session timers and readable attendee counts.
+            - "MARK MY ATTENDANCE" action button and active countdown banner in Student Room now provide sharp contrast and clear disabled states.
           - 👤 **Student Profile & Device MAC Binding**: Persistent storage of Student Full Name, Roll ID, and authentic IEEE 802 formatted MAC address.
           - 📱 **Realtime Attendance Sessions**: Supabase Realtime integration with role-based faculty & student portals.
           - 📡 **Classroom Gateway Integration**: Fully compatible with ESP32-S3 gateway firmware with deduplication, session nonce validation, and serial/cloud attendance reporting.
           - 🔗 **Dual-Role BLE Mesh**: Packet relay engine with bounded in-memory cache and TTL hop enforcement.
           EOF
 
-          ARM_APK="$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-arm64-v8a.apk"
-          UNI_APK="$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-universal.apk"
+          ARM64_APK="$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-arm64-v8a.apk"
+          ARMV7_APK="$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-armeabi-v7a.apk"
           IOS_IPA="$GITHUB_WORKSPACE/release-assets/ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}.ipa"
+
+          ASSETS=("$ARM64_APK" "$IOS_IPA")
+          if [ -f "$ARMV7_APK" ]; then
+            ASSETS+=("$ARMV7_APK")
+          fi
 
           if gh release view "${{ steps.vars.outputs.VERSION }}" >/dev/null 2>&1; then
             echo "Release ${{ steps.vars.outputs.VERSION }} already exists. Overwriting assets and updating notes..."
-            gh release upload "${{ steps.vars.outputs.VERSION }}" \
-              "$ARM_APK" "$UNI_APK" "$IOS_IPA" \
-              --clobber
+            gh release upload "${{ steps.vars.outputs.VERSION }}" "${ASSETS[@]}" --clobber
             gh release edit "${{ steps.vars.outputs.VERSION }}" \
               --title "BLE Mesh Attendance ${{ steps.vars.outputs.VERSION }}" \
               --notes-file release_notes.md
           else
             echo "Creating new release ${{ steps.vars.outputs.VERSION }}..."
-            gh release create "${{ steps.vars.outputs.VERSION }}" \
-              "$ARM_APK#ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-arm64-v8a.apk" \
-              "$UNI_APK#ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}-universal.apk" \
-              "$IOS_IPA#ble-mesh-attendance-${{ steps.vars.outputs.VERSION }}.ipa" \
+            gh release create "${{ steps.vars.outputs.VERSION }}" "${ASSETS[@]}" \
               --title "BLE Mesh Attendance ${{ steps.vars.outputs.VERSION }}" \
               --notes-file release_notes.md
           fi

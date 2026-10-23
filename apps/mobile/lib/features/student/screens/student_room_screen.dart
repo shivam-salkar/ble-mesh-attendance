@@ -230,6 +230,7 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final subject = widget.subject;
     final hasActiveSession = _activeSession != null && _activeSession!.isActive;
     final isAlreadyMarked = _markedRecord != null || _bleService.isAttendanceMarked;
@@ -358,7 +359,9 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
                 side: BorderSide(
-                  color: isConnectedToGateway ? Colors.green.shade400 : theme.colorScheme.outlineVariant,
+                  color: isConnectedToGateway
+                      ? (isDark ? const Color(0xFF22C55E) : const Color(0xFF4CAF50))
+                      : theme.colorScheme.outlineVariant,
                   width: isConnectedToGateway ? 1.5 : 1.0,
                 ),
               ),
@@ -373,13 +376,15 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
                             color: isConnectedToGateway
-                                ? Colors.green.shade100
+                                ? (isDark ? const Color(0xFF144D29) : const Color(0xFFC8E6C9))
                                 : theme.colorScheme.surfaceContainerHighest,
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
                             isConnectedToGateway ? Icons.bluetooth_connected : Icons.bluetooth_searching,
-                            color: isConnectedToGateway ? Colors.green.shade800 : theme.colorScheme.primary,
+                            color: isConnectedToGateway
+                                ? (isDark ? const Color(0xFF4ADE80) : const Color(0xFF14532D))
+                                : theme.colorScheme.primary,
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -396,7 +401,9 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
                                     ? 'Connected: ${_bleService.connectedDeviceName}'
                                     : 'Connect to ESP32 Gateway in classroom',
                                 style: theme.textTheme.bodySmall?.copyWith(
-                                  color: isConnectedToGateway ? Colors.green.shade800 : theme.colorScheme.onSurfaceVariant,
+                                  color: isConnectedToGateway
+                                      ? (isDark ? const Color(0xFF4ADE80) : const Color(0xFF14532D))
+                                      : theme.colorScheme.onSurfaceVariant,
                                   fontWeight: isConnectedToGateway ? FontWeight.bold : FontWeight.normal,
                                 ),
                               ),
@@ -406,15 +413,24 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: isConnectedToGateway ? Colors.green.shade100 : Colors.grey.shade200,
+                            color: isConnectedToGateway
+                                ? (isDark ? const Color(0xFF144D29) : const Color(0xFFC8E6C9))
+                                : (isDark ? const Color(0xFF334155) : Colors.grey.shade200),
                             borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: isConnectedToGateway
+                                  ? (isDark ? const Color(0xFF22C55E) : const Color(0xFF81C784))
+                                  : (isDark ? const Color(0xFF475569) : Colors.grey.shade300),
+                            ),
                           ),
                           child: Text(
                             isConnectedToGateway ? 'ONLINE' : 'OFFLINE',
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.bold,
-                              color: isConnectedToGateway ? Colors.green.shade900 : Colors.grey.shade700,
+                              color: isConnectedToGateway
+                                  ? (isDark ? const Color(0xFF4ADE80) : const Color(0xFF14532D))
+                                  : (isDark ? const Color(0xFF94A3B8) : Colors.grey.shade700),
                             ),
                           ),
                         ),
@@ -476,7 +492,9 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
                 side: BorderSide(
-                  color: hasActiveSession ? Colors.green.shade400 : theme.colorScheme.outlineVariant,
+                  color: hasActiveSession
+                      ? (isDark ? const Color(0xFF22C55E) : const Color(0xFF4CAF50))
+                      : theme.colorScheme.outlineVariant,
                   width: hasActiveSession ? 1.5 : 1.0,
                 ),
               ),
@@ -491,13 +509,15 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
                             color: hasActiveSession
-                                ? Colors.green.shade100
+                                ? (isDark ? const Color(0xFF144D29) : const Color(0xFFC8E6C9))
                                 : theme.colorScheme.surfaceContainerHighest,
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
                             hasActiveSession ? Icons.sensors : Icons.sensors_off,
-                            color: hasActiveSession ? Colors.green.shade800 : Colors.grey,
+                            color: hasActiveSession
+                                ? (isDark ? const Color(0xFF4ADE80) : const Color(0xFF14532D))
+                                : Colors.grey,
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -514,7 +534,9 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
                                     ? 'Teacher has started recording attendance'
                                     : 'Waiting for teacher to start attendance...',
                                 style: theme.textTheme.bodySmall?.copyWith(
-                                  color: hasActiveSession ? Colors.green.shade800 : theme.colorScheme.onSurfaceVariant,
+                                  color: hasActiveSession
+                                      ? (isDark ? const Color(0xFF4ADE80) : const Color(0xFF14532D))
+                                      : theme.colorScheme.onSurfaceVariant,
                                   fontWeight: hasActiveSession ? FontWeight.bold : FontWeight.normal,
                                 ),
                               ),
@@ -531,31 +553,47 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
                         width: double.infinity,
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          color: Colors.green.shade50,
+                          color: isDark ? const Color(0xFF0D3319) : const Color(0xFFE8F5E9),
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.green.shade300),
+                          border: Border.all(
+                            color: isDark ? const Color(0xFF22C55E) : const Color(0xFFA5D6A7),
+                            width: 1.5,
+                          ),
                         ),
                         child: Column(
                           children: [
-                            Icon(Icons.check_circle, color: Colors.green.shade700, size: 48),
+                            Icon(
+                              Icons.check_circle,
+                              color: isDark ? const Color(0xFF4ADE80) : const Color(0xFF15803D),
+                              size: 48,
+                            ),
                             const SizedBox(height: 8),
                             Text(
                               'ATTENDANCE VERIFIED & RECORDED',
                               textAlign: TextAlign.center,
                               style: TextStyle(
-                                color: Colors.green.shade900,
-                                fontWeight: FontWeight.bold,
+                                color: isDark ? Colors.white : const Color(0xFF14532D),
+                                fontWeight: FontWeight.w900,
                                 fontSize: 16,
+                                letterSpacing: 0.3,
                               ),
                             ),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: 6),
                             Text(
                               'Student: ${_authService.currentProfile?.name ?? (_studentProfile?.name ?? "Student")}',
-                              style: TextStyle(color: Colors.green.shade800, fontSize: 13),
+                              style: TextStyle(
+                                color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1E293B),
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
+                            const SizedBox(height: 2),
                             Text(
                               'Roll: ${_authService.currentProfile?.rollNumber ?? (_studentProfile?.studentId ?? "N/A")} • Method: ${_markedRecord?.verificationMethod ?? "BLE_GATEWAY"}',
-                              style: TextStyle(color: Colors.green.shade800, fontSize: 12),
+                              style: TextStyle(
+                                color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF475569),
+                                fontSize: 12,
+                              ),
                             ),
                           ],
                         ),
@@ -592,29 +630,41 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         decoration: BoxDecoration(
-                          color: Colors.green.shade100,
+                          color: isDark ? const Color(0xFF0D3319) : const Color(0xFFE8F5E9),
                           borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: isDark ? const Color(0xFF22C55E) : const Color(0xFFA5D6A7),
+                            width: 1.5,
+                          ),
                         ),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Row(
                               children: [
-                                const Icon(Icons.timer_outlined, color: Colors.green, size: 20),
+                                Icon(
+                                  Icons.timer_outlined,
+                                  color: isDark ? const Color(0xFF4ADE80) : const Color(0xFF15803D),
+                                  size: 20,
+                                ),
                                 const SizedBox(width: 8),
                                 Text(
                                   'Time Remaining:',
-                                  style: TextStyle(color: Colors.green.shade900, fontWeight: FontWeight.bold),
+                                  style: TextStyle(
+                                    color: isDark ? Colors.white : const Color(0xFF14532D),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                  ),
                                 ),
                               ],
                             ),
                             Text(
                               _activeSession!.timeRemainingFormatted,
                               style: TextStyle(
-                                color: Colors.green.shade900,
-                                fontWeight: FontWeight.bold,
+                                color: isDark ? const Color(0xFF4ADE80) : const Color(0xFF15803D),
+                                fontWeight: FontWeight.w900,
                                 fontFamily: 'monospace',
-                                fontSize: 16,
+                                fontSize: 17,
                               ),
                             ),
                           ],
@@ -640,11 +690,20 @@ class _StudentRoomScreenState extends State<StudentRoomScreen> {
                             !isConnectedToGateway
                                 ? 'CONNECT TO GATEWAY FIRST'
                                 : (_isSubmitting ? 'RECORDING ATTENDANCE...' : 'MARK MY ATTENDANCE'),
-                            style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                            style: TextStyle(
+                              fontWeight: FontWeight.w900,
+                              fontSize: 15,
+                              letterSpacing: 0.6,
+                              color: !isConnectedToGateway
+                                  ? (isDark ? const Color(0xFFCBD5E1) : const Color(0xFF475569))
+                                  : Colors.white,
+                            ),
                           ),
                           style: FilledButton.styleFrom(
-                            backgroundColor: Colors.green.shade700,
+                            backgroundColor: const Color(0xFF15803D),
                             foregroundColor: Colors.white,
+                            disabledBackgroundColor: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                            disabledForegroundColor: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF475569),
                             padding: const EdgeInsets.symmetric(vertical: 16),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           ),

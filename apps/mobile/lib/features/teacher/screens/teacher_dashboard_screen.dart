@@ -826,6 +826,7 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
   }
 
   Widget _buildActiveSessionCard(BuildContext context, AttendanceSession session) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final remaining = session.timeRemaining;
     final mins = remaining.inMinutes.toString().padLeft(2, '0');
     final secs = (remaining.inSeconds % 60).toString().padLeft(2, '0');
@@ -834,8 +835,11 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: Colors.green.shade50,
-        border: Border.all(color: Colors.green.shade400, width: 2),
+        color: isDark ? const Color(0xFF0D3319) : const Color(0xFFE8F5E9),
+        border: Border.all(
+          color: isDark ? const Color(0xFF22C55E) : const Color(0xFF4CAF50),
+          width: 2,
+        ),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
@@ -849,17 +853,17 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                   Container(
                     width: 10,
                     height: 10,
-                    decoration: const BoxDecoration(
-                      color: Colors.green,
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF4ADE80) : const Color(0xFF15803D),
                       shape: BoxShape.circle,
                     ),
                   ),
                   const SizedBox(width: 8),
-                  const Text(
+                  Text(
                     'ATTENDANCE ACTIVE',
                     style: TextStyle(
-                      color: Colors.green,
-                      fontWeight: FontWeight.bold,
+                      color: isDark ? const Color(0xFF4ADE80) : const Color(0xFF14532D),
+                      fontWeight: FontWeight.w900,
                       letterSpacing: 1.1,
                     ),
                   ),
@@ -868,13 +872,16 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.green.shade100,
+                  color: isDark ? const Color(0xFF144D29) : const Color(0xFFC8E6C9),
                   borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: isDark ? const Color(0xFF22C55E) : const Color(0xFF81C784),
+                  ),
                 ),
                 child: Text(
                   '$mins:$secs remaining',
                   style: TextStyle(
-                    color: Colors.green.shade800,
+                    color: isDark ? Colors.white : const Color(0xFF14532D),
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -884,9 +891,20 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
           const SizedBox(height: 12),
           Text(
             '${session.subjectName ?? "Active Lecture"}${session.subjectCode != null ? " (${session.subjectCode})" : ""}',
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: isDark ? Colors.white : const Color(0xFF111827),
+            ),
           ),
-          Text('Class: ${session.className ?? "Standard"} | ${session.classroomName ?? "Classroom"}'),
+          const SizedBox(height: 2),
+          Text(
+            'Class: ${session.className ?? "Standard"} | ${session.classroomName ?? "Classroom"}',
+            style: TextStyle(
+              color: isDark ? const Color(0xFFD1D5DB) : const Color(0xFF374151),
+              fontSize: 13,
+            ),
+          ),
           const SizedBox(height: 16),
 
           // Realtime count
@@ -896,21 +914,30 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                 child: Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: isDark ? const Color(0xFF132A1C) : Colors.white,
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.green.shade200),
+                    border: Border.all(
+                      color: isDark ? const Color(0xFF22C55E) : const Color(0xFFA5D6A7),
+                    ),
                   ),
                   child: Column(
                     children: [
                       Text(
                         '$presentCount',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 26,
                           fontWeight: FontWeight.bold,
-                          color: Colors.green,
+                          color: isDark ? const Color(0xFF4ADE80) : const Color(0xFF15803D),
                         ),
                       ),
-                      const Text('Present (Realtime)', style: TextStyle(fontSize: 12)),
+                      Text(
+                        'Present (Realtime)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: isDark ? const Color(0xFFD1D5DB) : const Color(0xFF374151),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -920,17 +947,30 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
                 child: Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.grey.shade300),
+                    border: Border.all(
+                      color: isDark ? const Color(0xFF475569) : Colors.grey.shade300,
+                    ),
                   ),
-                  child: const Column(
+                  child: Column(
                     children: [
                       Text(
                         'ESP32',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: isDark ? Colors.white : const Color(0xFF111827),
+                        ),
                       ),
-                      Text('Gateway 405', style: TextStyle(fontSize: 12)),
+                      Text(
+                        'Gateway 405',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF6B7280),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -944,8 +984,12 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
             child: OutlinedButton.icon(
               onPressed: () => _attendanceService.closeSession(session.id),
               icon: const Icon(Icons.stop_circle_outlined, color: Colors.red),
-              label: const Text('CLOSE ATTENDANCE NOW', style: TextStyle(color: Colors.red)),
+              label: const Text(
+                'CLOSE ATTENDANCE NOW',
+                style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+              ),
               style: OutlinedButton.styleFrom(
+                backgroundColor: isDark ? const Color(0xFF2A1515) : const Color(0xFFFFEBEE),
                 side: const BorderSide(color: Colors.red),
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
@@ -958,6 +1002,7 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
   }
 
   Widget _buildRealtimeAttendeeList(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final records = _attendanceService.sessionRecords;
 
     return Column(
@@ -972,7 +1017,11 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
             ),
             Text(
               '${records.length} recorded',
-              style: const TextStyle(color: Colors.grey, fontSize: 13),
+              style: TextStyle(
+                color: isDark ? const Color(0xFF94A3B8) : Colors.grey.shade600,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ],
         ),
@@ -982,10 +1031,19 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
             padding: const EdgeInsets.all(24),
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: Colors.grey.shade100,
+              color: isDark ? const Color(0xFF1E293B) : Colors.grey.shade100,
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isDark ? const Color(0xFF334155) : Colors.grey.shade300,
+              ),
             ),
-            child: const Text('Waiting for students to submit attendance...'),
+            child: Text(
+              'Waiting for students to submit attendance...',
+              style: TextStyle(
+                color: isDark ? const Color(0xFF94A3B8) : Colors.grey.shade700,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
           )
         else
           ListView.builder(
@@ -998,27 +1056,51 @@ class _TeacherDashboardScreenState extends State<TeacherDashboardScreen> {
 
               return Card(
                 elevation: 0,
-                color: Colors.grey.shade50,
+                color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(
+                    color: isDark ? const Color(0xFF334155) : Colors.grey.shade200,
+                  ),
+                ),
                 margin: const EdgeInsets.only(bottom: 6),
                 child: ListTile(
                   leading: CircleAvatar(
-                    backgroundColor: Colors.green.shade100,
+                    backgroundColor: isDark ? const Color(0xFF144D29) : Colors.green.shade100,
                     child: Text(
                       rec.studentName.isNotEmpty ? rec.studentName[0] : 'S',
-                      style: TextStyle(color: Colors.green.shade800, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        color: isDark ? const Color(0xFF4ADE80) : const Color(0xFF14532D),
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
-                  title: Text(rec.studentName, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('Roll: ${rec.rollNumber ?? rec.studentId} • $timeStr'),
+                  title: Text(
+                    rec.studentName,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Roll: ${rec.rollNumber ?? rec.studentId} • $timeStr',
+                    style: TextStyle(
+                      color: isDark ? const Color(0xFF94A3B8) : Colors.black54,
+                    ),
+                  ),
                   trailing: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
-                      color: Colors.green.shade100,
+                      color: isDark ? const Color(0xFF144D29) : Colors.green.shade100,
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
                       rec.status,
-                      style: TextStyle(color: Colors.green.shade800, fontSize: 11, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        color: isDark ? const Color(0xFF4ADE80) : const Color(0xFF14532D),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                 ),
